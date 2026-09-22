@@ -1,0 +1,74 @@
+<?php declare(strict_types = 1);
+
+/*
+ * Example drop-in section. Rename to problems_by_hour.php to enable it; it then appears
+ * in the editor's "Add section" list. Copy it as a starting point for your own.
+ *
+ * It shows the pattern every section follows: declare options, read through $ctx (here
+ * the shared problem list, so it costs no extra API calls when another section already
+ * fetched it), and return blocks. No HTML, no direct database access.
+ */
+
+use Modules\Reporter\Lib\Core\Context;
+use Modules\Reporter\Lib\Core\SectionResult;
+use Modules\Reporter\Lib\Section\AbstractSection;
+
+return new class extends AbstractSection {
+
+	public function type(): string {
+		return 'problems_by_hour';
+	}
+
+	public function label(): string {
+		return 'Problems by hour of day';
+	}
+
+	public function description(): string {
+		return 'When problems start, by local hour. Peaks that line up with backups or batch jobs show up here.';
+	}
+
+	public function options(): array {
+		return [
+			self::sevOption(),
+			['name' => 'weekdays_only', 'label' => 'Weekdays only', 'type' => 'bool', 'default' => false]
+		];
+	}
+
+	public function run(Context $ctx, array $o): SectionResult {
+		$tz = new \DateTimeZone($ctx->timezone());
+		$series = array_fill(0, 6, array_fill(0, 24, 0));
+		$counted = 0;
+
+		foreach ($ctx->problems() as $p) {
+			if ($p['severity'] < (int) $o['min_severity']) {
+				continue;
+			}
+
+			$local = (new \DateTimeImmutable('@'.$p['clock']))->setTimezone($tz);
+
+			if ($o['weekdays_only'] && (int) $local->format('N') > 5) {
+				continue;
+			}
+
+			$series[$p['severity']][(int) $local->format('G')]++;
+			$counted++;
+		}
+
+		$labels = array_map(static fn($h) => sprintf('%02d', $h), range(0, 23));
+		$totals = [];
+
+		for ($h = 0; $h < 24; $h++) {
+			$totals[] = ['hour' => $labels[$h].':00', 'problems' => array_sum(array_column($series, $h))];
+		}
+
+		usort($totals, static fn($a, $b) => $b['problems'] <=> $a['problems']);
+
+		return (new SectionResult())
+			->chart('severity', '', ['labels' => $labels, 'series' => $series])
+			->table('Busiest hours', [
+				['key' => 'hour', 'label' => 'Hour starting'],
+				['key' => 'problems', 'label' => 'Problems raised', 'format' => 'int']
+			], array_slice($totals, 0, 5), ['sheet' => 'Problems by hour'])
+			->note(sprintf('%d problems, by local hour in %s.', $counted, $ctx->timezone()));
+	}
+};

@@ -1,0 +1,81 @@
+{
+    "manifest_version": 2.0,
+    "id": "reporter",
+    "name": "Report builder",
+    "version": "1.2.1",
+    "namespace": "Reporter",
+    "author": "John Danhires",
+    "description": "Customer-facing reports built from sections: problems and notifications per device, top metrics, capacity growth, availability, maintenance. PDF, XLSX and CSV. Read-only, budgeted, and scheduled from a CLI runner.",
+    "actions": {
+        "reporter.list": {
+            "class": "ReportList",
+            "view": "reporter.list"
+        },
+        "reporter.edit": {
+            "class": "ReportEdit",
+            "view": "reporter.edit"
+        },
+        "reporter.save": {
+            "class": "ReportSave",
+            "layout": "layout.json"
+        },
+        "reporter.delete": {
+            "class": "ReportDelete",
+            "layout": "layout.json"
+        },
+        "reporter.preview": {
+            "class": "ReportPreview",
+            "view": "reporter.preview"
+        },
+        "reporter.export": {
+            "class": "ReportExport"
+        },
+        "reporter.print": {
+            "class": "ReportPrint"
+        },
+        "reporter.settings": {
+            "class": "ReportSettings",
+            "view": "reporter.settings"
+        },
+        "reporter.settings.save": {
+            "class": "ReportSettingsSave",
+            "layout": "layout.json"
+        },
+        "reporter.request": {
+            "class": "ReportRequest",
+            "layout": "layout.json"
+        }
+    },
+    "assets": {
+        "css": [
+            "reporter.css"
+        ]
+    },
+    "config": {
+        "data_dir": "/var/lib/zabbix/reporter",
+        "min_user_type_view": 1,
+        "min_user_type_edit": 2,
+        "limits": {
+            "max_hosts": 5000,
+            "max_items": 20000,
+            "max_period_days": 400,
+            "max_rows_frontend": 8000000,
+            "max_rows_cli": 40000000,
+            "max_api_calls": 4000,
+            "time_budget_frontend": 90,
+            "time_budget_cli": 1800,
+            "memory_headroom_mb": 96,
+            "max_concurrent_runs": 2,
+            "cache_ttl": 900,
+            "refresh_min_age": 60,
+            "throttle_ms_frontend": 0,
+            "throttle_ms_cli": 25,
+            "chunk_hosts": 500,
+            "chunk_ids": 1000,
+            "chunk_trend_items": 50,
+            "trend_rows_per_call": 50000,
+            "page_limit": 10000,
+            "pdf_max_table_rows": 500
+        }
+    }
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Zabbix report builder runner every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

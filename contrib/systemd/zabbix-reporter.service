@@ -1,0 +1,33 @@
+[Unit]
+Description=Zabbix report builder runner (scheduled reports and queued requests)
+Documentation=file://@MODULE_DIR@/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@WEB_USER@
+Group=@WEB_GROUP@
+UMask=0007
+ExecStart=@PHP@ @MODULE_DIR@/bin/reporter.php run-due --quiet
+Environment=REPORTER_DATA_DIR=@DATA_DIR@
+
+# Scheduled reports are the lowest priority thing on this box.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h
+
+# Runs as the web server user, like the frontend. It reads the module, writes the data
+# directory, and talks to Zabbix and SMTP over the network. Nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=@DATA_DIR@
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

@@ -1,0 +1,293 @@
+/*
+ * Report builder. Everything is prefixed with .rpt- so it cannot leak into other pages;
+ * colours are neutral greys with alpha so the same rules read on the blue, dark and
+ * high-contrast themes. The report itself is styled inside its own iframe.
+ */
+
+.rpt-notice {
+	margin: 0 0 12px;
+	padding: 8px 12px;
+	border-left: 4px solid #ffa059;
+	background: rgba(255, 160, 89, 0.12);
+	line-height: 1.5;
+}
+
+.rpt-notice-error {
+	border-left-color: #e45959;
+	background: rgba(228, 89, 89, 0.10);
+}
+
+.rpt-notice ul {
+	margin: 6px 0 0 18px;
+	list-style: disc;
+}
+
+.rpt-muted,
+.rpt-hint {
+	opacity: 0.72;
+}
+
+.rpt-hint {
+	margin-top: 3px;
+	font-size: 0.92em;
+	line-height: 1.4;
+}
+
+.rpt-invalid {
+	color: #e45959;
+}
+
+.rpt-actions {
+	white-space: nowrap;
+}
+
+.rpt-action + .rpt-action {
+	margin-left: 12px;
+}
+
+.rpt-empty {
+	padding: 40px 0;
+	text-align: center;
+}
+
+.rpt-empty p + p {
+	margin-top: 6px;
+	opacity: 0.72;
+}
+
+/* Preview */
+
+.rpt-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin: 0 0 12px;
+}
+
+.rpt-toolbar,
+.rpt-downloads,
+.rpt-inline {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.rpt-toolbar label {
+	margin-right: 2px;
+}
+
+.rpt-num {
+	width: 70px;
+}
+
+.rpt-link {
+	margin-left: 4px;
+}
+
+.rpt-cache {
+	margin: 0 0 8px;
+	font-size: 0.92em;
+	opacity: 0.8;
+}
+
+.rpt-frame {
+	display: block;
+	width: 100%;
+	min-height: 600px;
+	border: 1px solid rgba(128, 128, 128, 0.35);
+	background: #ffffff;
+}
+
+/* Editor */
+
+.rpt-editor {
+	max-width: 980px;
+}
+
+.rpt-fieldset {
+	margin: 0 0 18px;
+	padding: 12px 16px 6px;
+	border: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+.rpt-fieldset > legend {
+	padding: 0 6px;
+	font-weight: bold;
+	font-size: 1.1em;
+}
+
+.rpt-field {
+	display: grid;
+	grid-template-columns: 180px minmax(0, 1fr);
+	gap: 12px;
+	align-items: start;
+	margin: 0 0 10px;
+}
+
+.rpt-field > label {
+	padding-top: 5px;
+	text-align: right;
+}
+
+.rpt-control input[type="text"],
+.rpt-control textarea,
+.rpt-control select {
+	width: 100%;
+	max-width: 560px;
+	box-sizing: border-box;
+}
+
+.rpt-control .rpt-inline input[type="text"] {
+	width: auto;
+	flex: 1 1 260px;
+}
+
+.rpt-mono {
+	font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+
+.rpt-check {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-right: 14px;
+}
+
+.rpt-cards {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.rpt-card {
+	border: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+.rpt-card-missing {
+	border-color: #e45959;
+}
+
+.rpt-card-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 8px 12px;
+	background: rgba(128, 128, 128, 0.08);
+}
+
+.rpt-card-index {
+	min-width: 1.6em;
+	font-weight: bold;
+	opacity: 0.6;
+}
+
+.rpt-card-title {
+	flex: 1;
+}
+
+.rpt-card-tools {
+	display: flex;
+	gap: 10px;
+	white-space: nowrap;
+}
+
+.rpt-card-body {
+	padding: 10px 12px 2px;
+}
+
+.rpt-json {
+	margin: 0 0 18px;
+}
+
+.rpt-json summary {
+	cursor: pointer;
+	margin-bottom: 8px;
+}
+
+.rpt-json textarea {
+	width: 100%;
+	box-sizing: border-box;
+	margin: 6px 0;
+}
+
+.rpt-submit {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 6px 0 30px;
+}
+
+@media (max-width: 720px) {
+	.rpt-field {
+		grid-template-columns: 1fr;
+		gap: 4px;
+	}
+
+	.rpt-field > label {
+		text-align: left;
+	}
+}
+
+/* Settings */
+
+.rpt-notice-ok {
+	border-left-color: #59db8f;
+	background: rgba(89, 219, 143, 0.12);
+}
+
+.rpt-badge {
+	display: inline-block;
+	padding: 1px 7px;
+	border-radius: 2px;
+	font-size: 0.92em;
+	line-height: 1.6;
+}
+
+.rpt-badge-ok {
+	background: rgba(89, 219, 143, 0.18);
+}
+
+.rpt-badge-warn {
+	background: rgba(255, 200, 89, 0.25);
+}
+
+.rpt-badge-bad {
+	background: rgba(228, 89, 89, 0.20);
+}
+
+.rpt-facts th {
+	padding: 3px 16px 3px 0;
+	text-align: left;
+	font-weight: normal;
+	opacity: 0.72;
+	white-space: nowrap;
+	vertical-align: top;
+}
+
+.rpt-facts td {
+	padding: 3px 0;
+}
+
+.rpt-table {
+	margin-bottom: 8px;
+}
+
+.rpt-table td {
+	vertical-align: top;
+}
+
+.rpt-pre {
+	margin: 6px 0 0;
+	padding: 6px 8px;
+	background: rgba(128, 128, 128, 0.12);
+	font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace;
+	white-space: pre-wrap;
+}
+
+.rpt-num-wide {
+	width: 130px;
+}
