@@ -78,8 +78,8 @@ final class Config {
 	}
 
 	/**
-	 * A directory inside the data directory, created group-writable with setgid so the
-	 * web server and the runner user can each use what the other wrote.
+	 * A directory inside the data directory. Mode 0770, no setgid: the runner's systemd
+	 * unit sets RestrictSUIDSGID, which denies creating directories with the setgid bit.
 	 */
 	public static function dataDir(string $sub = ''): string {
 		$base = rtrim((string) self::get('data_dir', '/var/lib/zabbix/reporter'), '/');
@@ -87,7 +87,7 @@ final class Config {
 
 		if (!is_dir($dir)) {
 			$old = umask(0007);
-			$made = @mkdir($dir, 02770, true);
+			$made = @mkdir($dir, 0770, true);
 			umask($old);
 
 			if (!$made && !is_dir($dir)) {
@@ -97,7 +97,7 @@ final class Config {
 				));
 			}
 
-			@chmod($dir, 02770);
+			@chmod($dir, 0770);
 		}
 
 		if (!is_writable($dir)) {

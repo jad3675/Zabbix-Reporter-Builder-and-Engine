@@ -238,6 +238,23 @@ check('secrets file is private to its owner', (fileperms(Config::dataDir().'/sec
 Secrets::setToken(null, 'Admin');
 check('token can be removed', !Secrets::status()['token_set']);
 
+// The runner's systemd unit sets RestrictSUIDSGID, which denies creating a directory
+// with the setgid bit (EPERM). Nothing may ask for one.
+$setgid = [];
+
+foreach (['../lib', '../bin', '../actions', '../contrib'] as $dir) {
+	$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(__DIR__.'/'.$dir));
+
+	foreach ($it as $f) {
+		if ($f->isFile() && preg_match('/\.(php|sh)$/', $f->getFilename())
+				&& preg_match('/(mkdir|chmod|install)[^\n]*\b0?2[0-7]{3}\b/', (string) file_get_contents($f->getPathname()))) {
+			$setgid[] = $f->getFilename();
+		}
+	}
+}
+
+check('nothing creates setgid directories', $setgid === [], implode(', ', $setgid));
+
 $rid = Requests::enqueue('run_report', ['id' => 'x'], 'Admin');
 check('request queued', count(Requests::pending()) === 1);
 Requests::complete(Requests::pending()[0], true, 'Sent.');

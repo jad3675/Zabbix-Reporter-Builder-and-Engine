@@ -157,8 +157,9 @@ $produce = static function (array $def, Period $period, array $formats, ?string 
 
 	$dir = ($out ?? $out_dir()).'/'.$def['id'];
 
-	if (!is_dir($dir) && !mkdir($dir, 02770, true) && !is_dir($dir)) {
-		throw new RuntimeException(sprintf('Cannot create %s.', $dir));
+	if (!is_dir($dir) && !@mkdir($dir, 0770, true) && !is_dir($dir)) {
+		throw new RuntimeException(sprintf('Cannot create %s (running as %s). Check the owner of the data directory.',
+			$dir, function_exists('posix_geteuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? '?') : '?'));
 	}
 
 	@ini_set('memory_limit', '1024M');
@@ -229,7 +230,52 @@ try {
 			$say('sections:  '.implode(', ', array_keys($registry->all())));
 			$say('zabbix:    '.($set['runner']['api_url'] ?: '(not set)'));
 			$say('email:     '.($st['smtp'] ? sprintf('%s (%s:%d)', $st['smtp']['name'], $st['smtp']['server'], $st['smtp']['port']) : '(not set)'));
-			$say('api:       '.Channels::testApi());
+			// Where setup usually goes wrong: ownership, leftover setgid bits, or a unit
+			// running as a different user than the one that owns the data directory.
+			$dir = Config::dataDir();
+			$me = function_exists('posix_geteuid') ? (posix_getpwuid(posix_geteuid())['name'] ?? '?') : '?';
+			$say('running as: '.$me);
+
+			foreach (['', 'out', 'state', 'definitions', 'cache', 'requests', 'locks'] as $sub) {
+				$path = $sub === '' ? $dir : $dir.'/'.$sub;
+
+				if (!is_dir($path)) {
+					continue;
+				}
+
+				$perms = fileperms($path);
+				$owner = function_exists('posix_getpwuid') ? (posix_getpwuid(fileowner($path))['name'] ?? '?') : '?';
+				$flags = [];
+
+				if (($perms & 02000) !== 0) {
+					$flags[] = 'setgid, which the runner\'s systemd unit refuses to create: chmod -R g-s '.$dir;
+				}
+
+				if (!is_writable($path)) {
+					$flags[] = 'NOT WRITABLE by '.$me;
+				}
+
+				if ($flags) {
+					$say(sprintf('  %-12s %s %s  %s', $sub === '' ? '(data dir)' : $sub,
+						substr(sprintf('%o', $perms), -4), $owner, implode('; ', $flags)));
+				}
+			}
+
+			$unit = '/etc/systemd/system/zabbix-reporter.service';
+
+			if (is_readable($unit) && preg_match('/^User=(.+)$/m', (string) file_get_contents($unit), $m)) {
+				$unit_user = trim($m[1]);
+				$say('unit user: '.$unit_user.($unit_user === $me || $me === '?' ? '' : ' (differs from the user running this check)'));
+			}
+
+
+			try {
+				$say('api:       '.Channels::testApi());
+			}
+			catch (Throwable $e) {
+				$say('api:       FAILED: '.$e->getMessage());
+			}
+
 			break;
 
 		case 'test-api':

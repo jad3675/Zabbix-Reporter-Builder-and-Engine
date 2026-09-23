@@ -13,7 +13,7 @@ if (defined('REPORTER_ROOT')) {
 }
 
 define('REPORTER_ROOT', dirname(__DIR__));
-define('REPORTER_VERSION', '1.2.1');
+define('REPORTER_VERSION', '1.2.3');
 
 spl_autoload_register(static function (string $class): void {
 	$prefix = 'Modules\\Reporter\\Lib\\';

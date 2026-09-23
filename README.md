@@ -183,14 +183,24 @@ the scheduled time, the report goes out at the next run after it comes back.
 Unzip the new release over the module directory. Definitions, settings and secrets live
 in the data directory and are untouched.
 
-## Removing
+## Starting over, and removing
+
+To reset the runner setup and set it up again from scratch:
 
 ```sh
-systemctl disable --now zabbix-reporter.timer
-rm /etc/systemd/system/zabbix-reporter.{service,timer}
+sh contrib/uninstall-runner.sh          # add --purge to delete reports, settings and token
+sh contrib/install-runner.sh
 ```
 
-Disable the module in Zabbix, then remove the module directory and the data directory.
+`install-runner.sh` prints each step and says which one failed, and ends by listing the
+data directory so you can see the ownership and modes it produced. It also repairs a
+data directory that was created by hand as root.
+
+`reporter.php check` reports the same ground truth from the runner's side: the user it
+runs as, any directory it cannot write, leftover setgid bits, and whether the systemd
+unit runs as a different user than the one owning the data directory.
+
+To remove the module as well: disable it in Zabbix, then delete the module directory.
 
 ## Known limitations
 

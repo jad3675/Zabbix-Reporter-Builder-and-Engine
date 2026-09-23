@@ -11,6 +11,9 @@
 
 set -eu
 
+step() { echo; echo "==> $*"; }
+trap 'rc=$?; [ $rc -eq 0 ] || echo "FAILED at the step above (exit $rc). Nothing after it ran." >&2' EXIT
+
 MODULE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 DATA_DIR=/var/lib/zabbix/reporter
 WEB_USER=
@@ -78,17 +81,31 @@ fi
 	echo "note: PHP zip extension missing; XLSX export is off until you install $pkg (and restart PHP-FPM)."
 }
 
+step "using"
 echo "module:   $MODULE_DIR"
 echo "data dir: $DATA_DIR"
 echo "runs as:  $WEB_USER:$WEB_GROUP"
 echo "php:      $PHP"
 
-# Data directory, owned by the web server user and nobody else.
+step "creating the data directory"
+# Data directory and everything under it, owned by the web server user and nobody else.
+# No setgid: the runner's unit sets RestrictSUIDSGID, which denies creating such dirs.
 mkdir -p "$(dirname "$DATA_DIR")"
-install -d -m 2770 -o "$WEB_USER" -g "$WEB_GROUP" "$DATA_DIR"
-chown -R "$WEB_USER:$WEB_GROUP" "$DATA_DIR"
-chmod -R o-rwx "$DATA_DIR"
+install -d -m 0770 -o "$WEB_USER" -g "$WEB_GROUP" "$DATA_DIR"
 
+for sub in definitions assets cache locks state state/requests requests out tmp; do
+	install -d -m 0770 -o "$WEB_USER" -g "$WEB_GROUP" "$DATA_DIR/$sub"
+done
+
+# Repairs a directory someone created as root before running this.
+chown -R "$WEB_USER:$WEB_GROUP" "$DATA_DIR"
+# GNU chmod leaves setuid/setgid on directories alone when given a numeric mode, so the
+# setgid bit needs removing by name. The runner's unit refuses to create such dirs.
+find "$DATA_DIR" -type d -exec chmod 0770 {} +
+find "$DATA_DIR" -type d -exec chmod g-s {} +
+find "$DATA_DIR" -type f -exec chmod 0660 {} +
+
+step "checking access"
 # The parent must let the web server through (a 0750 /var/lib/zabbix owned by zabbix
 # would not).
 if ! runuser -u "$WEB_USER" -- test -w "$DATA_DIR"; then
@@ -98,6 +115,7 @@ if ! runuser -u "$WEB_USER" -- test -w "$DATA_DIR"; then
 		echo "$WEB_USER still cannot write $DATA_DIR. Check: namei -l $DATA_DIR" >&2; exit 1; }
 fi
 
+step "SELinux"
 # SELinux (RHEL): let php-fpm write the data directory.
 if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
 	semanage fcontext -a -t httpd_sys_rw_content_t "$DATA_DIR(/.*)?" 2>/dev/null \
@@ -116,7 +134,7 @@ if [ "$DATA_DIR" != /var/lib/zabbix/reporter ]; then
 	echo "NOTE: set \"data_dir\": \"$DATA_DIR\" in $MODULE_DIR/manifest.json so the frontend uses it."
 fi
 
-# systemd timer.
+step "installing the timer"
 for unit in zabbix-reporter.service zabbix-reporter.timer; do
 	sed -e "s#@MODULE_DIR@#$MODULE_DIR#g" -e "s#@DATA_DIR@#$DATA_DIR#g" -e "s#@PHP@#$PHP#g" \
 		-e "s#@WEB_USER@#$WEB_USER#g" -e "s#@WEB_GROUP@#$WEB_GROUP#g" \
@@ -127,6 +145,8 @@ systemctl daemon-reload
 systemctl enable --now zabbix-reporter.timer
 systemctl start zabbix-reporter.service || true
 
+step "result"
+ls -ld "$DATA_DIR" "$DATA_DIR"/*/ | sed 's/^/  /'
 echo
 echo "Done. Next: Zabbix > Reports > Report builder > Settings. Enter the Zabbix URL and an"
 echo "API token, pick the email media type, and use the test buttons."
