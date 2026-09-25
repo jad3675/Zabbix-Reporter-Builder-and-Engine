@@ -21,6 +21,7 @@ final class Definition {
 			'description' => '',
 			'timezone' => date_default_timezone_get(),
 			'period' => ['type' => 'previous_month', 'n' => 30],
+			'compare' => false,
 			'scope' => ['groups' => [], 'host_tags' => [], 'tag_logic' => 'and'],
 			'branding' => ['title' => 'Monthly service report', 'customer' => '', 'accent' => '#1f5f8b',
 				'logo' => '', 'paper' => 'Letter', 'footer' => ''],
@@ -66,6 +67,8 @@ final class Definition {
 			'type' => array_key_exists($type, Period::TYPES) ? $type : 'previous_month',
 			'n' => max(1, min(400, (int) ($period['n'] ?? 30)))
 		];
+
+		$def['compare'] = !empty($in['compare']);
 
 		// Scope.
 		$scope = is_array($in['scope'] ?? null) ? $in['scope'] : [];

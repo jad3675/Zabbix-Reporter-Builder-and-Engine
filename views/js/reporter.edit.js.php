@@ -73,6 +73,7 @@ window.reporterEditorInit = () => {
 		def.branding = def.branding || {};
 		def.schedule = def.schedule || {enabled: false, cycle: 'monthly', day: 1, hour: 6};
 		def.sections = Array.isArray(def.sections) ? def.sections : [];
+		def.compare = !!def.compare;
 
 		for (const section of def.sections) {
 			const schema = CONFIG.schemas.find((s) => s.type === section.type);
@@ -185,6 +186,9 @@ window.reporterEditorInit = () => {
 
 			case 'select':
 				return select(value, spec.choices, onchange);
+
+			case 'textarea':
+				return area(value, onchange, 5, {maxlength: spec.maxlength || 4000});
 
 			case 'tags':
 				return area(value, onchange, 2, {class: 'rpt-mono', spellcheck: 'false'});
@@ -332,10 +336,10 @@ window.reporterEditorInit = () => {
 							}
 						}}, 'Add')
 					)
-				), 'One per line. Wildcards work: CCH/* matches every group under CCH.'),
+				), 'One per line. Wildcards work: Acme/* matches every group whose name starts with Acme/.'),
 				field('Host tags', area(d.scope.host_tags, (v) => d.scope.host_tags = v, 3,
 					{class: 'rpt-mono', spellcheck: 'false'}),
-					'Optional. One per line: site, site=Burnet, site~burn, site!=Lab, !decommissioned.'),
+					'Optional. One per line: site, site=Toronto, site~tor, site!=Lab, !decommissioned.'),
 				field('Tag logic', select(d.scope.tag_logic, {and: 'All tags must match', or: 'Any tag matches'},
 					(v) => d.scope.tag_logic = v))
 			),
@@ -346,6 +350,9 @@ window.reporterEditorInit = () => {
 					nRow.hidden = v !== 'last_n_days';
 				})),
 				nRow,
+				h('div', {class: 'rpt-field'}, h('span'), h('div', {class: 'rpt-control'},
+					check(d.compare, 'Compare against the period before', (v) => d.compare = v),
+					h('div', {class: 'rpt-hint'}, 'Adds "up 4" or "down 12" next to the headline numbers and a change column per device. Doubles the queries, so leave it off for very large reports.'))),
 				field('Time zone', text(d.timezone, (v) => d.timezone = v, {list: 'rpt-tz-list', spellcheck: 'false'}),
 					'Days, months and times in the report use this zone.')
 			),

@@ -23,17 +23,27 @@ final class Summary extends AbstractSection {
 	}
 
 	public function options(): array {
-		return [
+		return array_merge([
 			self::sevOption(),
 			['name' => 'daily_chart', 'label' => 'Problems per day chart', 'type' => 'bool', 'default' => true],
 			['name' => 'media_table', 'label' => 'Notifications by media type', 'type' => 'bool', 'default' => true]
-		];
+		], self::commonOptions());
 	}
 
 	public function run(Context $ctx, array $o): SectionResult {
 		$min = (int) $o['min_severity'];
-		$problems = array_filter($ctx->problems(), static fn($p) => $p['severity'] >= $min);
-		$alerts = $ctx->alerts();
+		$problems = $this->problems($ctx, $o);
+		$alerts = $this->alerts($ctx, $o);
+		$previous = $ctx->previous();
+		$before = $previous !== null
+			? ['problems' => count($this->problems($ctx, $o, $previous)), 'alerts' => 0]
+			: null;
+
+		if ($previous !== null) {
+			foreach ($this->alerts($ctx, $o, $previous) as $a) {
+				$before['alerts'] += $a['status'] === Alerts::SENT ? 1 : 0;
+			}
+		}
 
 		$resolved = 0;
 		$ttr = [];
@@ -81,15 +91,18 @@ final class Summary extends AbstractSection {
 
 		$total = count($problems);
 		$result = (new SectionResult())->kpis([
-			['label' => 'Devices covered', 'value' => count($ctx->hosts), 'format' => 'int'],
+			['label' => 'Devices covered', 'value' => count($this->hosts($ctx, $o)), 'format' => 'int'],
 			['label' => 'Devices with problems', 'value' => count($affected), 'format' => 'int'],
-			['label' => 'Problems raised', 'value' => $total, 'format' => 'int'],
+			['label' => 'Problems raised', 'value' => $total, 'format' => 'int',
+				'hint' => $before !== null ? self::change($total, $before['problems']) : ''],
 			['label' => 'High or disaster', 'value' => $high, 'format' => 'int'],
 			['label' => 'Resolved in period', 'value' => $total > 0 ? 100 * $resolved / $total : null,
 				'format' => 'pct', 'hint' => sprintf('%d of %d', $resolved, $total)],
 			['label' => 'Median time to resolve', 'value' => $ttr ? self::median($ttr) : null, 'format' => 'duration'],
 			['label' => 'Notifications sent', 'value' => $sent, 'format' => 'int',
-				'hint' => $failed > 0 ? sprintf('%d failed', $failed) : '']
+				'hint' => $failed > 0
+					? sprintf('%d failed', $failed)
+					: ($before !== null ? self::change($sent, $before['alerts']) : '')]
 		]);
 
 		if ($o['daily_chart']) {

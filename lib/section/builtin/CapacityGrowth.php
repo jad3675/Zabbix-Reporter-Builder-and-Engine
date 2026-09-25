@@ -27,7 +27,7 @@ final class CapacityGrowth extends AbstractSection {
 	}
 
 	public function options(): array {
-		return [
+		return array_merge([
 			['name' => 'item_tags', 'label' => 'Item tags', 'type' => 'tags', 'default' => 'component=storage'],
 			['name' => 'keys', 'label' => 'Item key patterns', 'type' => 'text', 'default' => '*pused*',
 				'hint' => 'Items must report percent used, e.g. vfs.fs.dependent.size[*,pused]'],
@@ -39,7 +39,7 @@ final class CapacityGrowth extends AbstractSection {
 			['name' => 'min_days', 'label' => 'Minimum days of data', 'type' => 'int', 'default' => 7, 'min' => 3,
 				'max' => 60],
 			['name' => 'limit', 'label' => 'Rows', 'type' => 'int', 'default' => 25, 'min' => 5, 'max' => 500]
-		];
+		], self::commonOptions(false));
 	}
 
 	public function validateOptions(array $o): array {
@@ -49,7 +49,9 @@ final class CapacityGrowth extends AbstractSection {
 	}
 
 	public function run(Context $ctx, array $o): SectionResult {
-		$items = $ctx->items(['tags' => $o['item_tags'], 'keys' => $o['keys'], 'names' => $o['names']]);
+		$hosts = $this->hosts($ctx, $o);
+		$items = array_filter($ctx->items(['tags' => $o['item_tags'], 'keys' => $o['keys'], 'names' => $o['names']]),
+			static fn($i) => isset($hosts[$i['hostid']]));
 		$result = new SectionResult();
 
 		if (!$items) {
@@ -65,6 +67,10 @@ final class CapacityGrowth extends AbstractSection {
 		$insufficient = 0;
 
 		foreach ($daily as $itemid => $series) {
+			if (!isset($items[$itemid])) {
+				continue;
+			}
+
 			if (count($series) < $o['min_days']) {
 				$insufficient++;
 

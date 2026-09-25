@@ -6,8 +6,8 @@ namespace Modules\Reporter\Lib\Core;
  * Tag filters in a one-per-line syntax that fits in a text field:
  *
  *   site              tag exists
- *   site=Cincinnati   equals
- *   site~cinc         contains
+ *   site=Toronto      equals
+ *   site~tor          contains
  *   site!=lab         does not equal
  *   !decommissioned   tag does not exist
  *

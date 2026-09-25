@@ -22,23 +22,22 @@ final class TopTriggers extends AbstractSection {
 	}
 
 	public function options(): array {
-		return [
+		return array_merge([
 			self::sevOption(),
+			['name' => 'group_by', 'label' => 'Group by', 'type' => 'select', 'default' => 'trigger',
+				'choices' => ['trigger' => 'Trigger, so each device is its own row',
+					'name' => 'Problem name, across every device']],
 			['name' => 'display_limit', 'label' => 'Problems shown', 'type' => 'int', 'default' => 20, 'min' => 5,
 				'max' => 200]
-		];
+		], self::commonOptions());
 	}
 
 	public function run(Context $ctx, array $o): SectionResult {
-		$min = (int) $o['min_severity'];
 		$by_trigger = [];
 
-		foreach ($ctx->problems() as $p) {
-			if ($p['severity'] < $min) {
-				continue;
-			}
-
-			$t = &$by_trigger[$p['objectid']];
+		foreach ($this->problems($ctx, $o) as $p) {
+			$key = $o['group_by'] === 'name' ? mb_strtolower($p['name']) : $p['objectid'];
+			$t = &$by_trigger[$key];
 			$t ??= ['name' => $p['name'], 'hosts' => [], 'severity' => $p['severity'], 'count' => 0, 'open_time' => 0,
 				'longest' => 0, 'last' => 0];
 			$open = Problems::openSeconds($p, $ctx->period->from, $ctx->period->till);

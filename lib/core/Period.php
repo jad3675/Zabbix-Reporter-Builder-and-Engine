@@ -139,6 +139,24 @@ final class Period {
 		return $lo;
 	}
 
+	/** The same length of time immediately before this period, for comparisons. */
+	public function previous(): self {
+		$length = $this->seconds();
+
+		return new self($this->from - $length, $this->from - 1, 'the previous '.self::describeLength($length),
+			$this->timezone);
+	}
+
+	private static function describeLength(int $seconds): string {
+		$days = (int) round($seconds / 86400);
+
+		if ($days >= 28 && $days <= 31) {
+			return 'month';
+		}
+
+		return $days === 7 ? 'week' : ($days <= 1 ? 'day' : $days.' days');
+	}
+
 	public function toArray(): array {
 		return ['from' => $this->from, 'till' => $this->till, 'label' => $this->label, 'timezone' => $this->timezone];
 	}

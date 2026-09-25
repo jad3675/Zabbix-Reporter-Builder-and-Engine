@@ -21,6 +21,8 @@ final class Context {
 	private array $limits;
 	private array $memo = [];
 	private array $warnings = [];
+	private $previous_factory = null;
+	private $previous = false;
 
 	public function __construct(Guard $api, Period $period, array $definition, array $scope, array $limits) {
 		$this->api = $api;
@@ -29,6 +31,22 @@ final class Context {
 		$this->hosts = $scope['hosts'];
 		$this->groups = $scope['groups'];
 		$this->limits = $limits;
+	}
+
+	/**
+	 * The same report over the preceding period, when the definition asks for
+	 * comparisons. Built once and only if a section actually asks for it.
+	 */
+	public function previous(): ?self {
+		if ($this->previous === false) {
+			$this->previous = $this->previous_factory === null ? null : ($this->previous_factory)();
+		}
+
+		return $this->previous;
+	}
+
+	public function setPreviousFactory(?callable $factory): void {
+		$this->previous_factory = $factory;
 	}
 
 	public function hostids(): array {

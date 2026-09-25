@@ -276,7 +276,7 @@ final class HtmlRenderer {
 	private static function align(array $c): string {
 		$format = $c['format'] ?? 'text';
 
-		if (in_array($format, ['int', 'number', 'number2', 'pp', 'pct', 'pct1', 'pct3', 'duration', 'units'], true)) {
+		if (in_array($format, ['int', 'delta', 'number', 'number2', 'pp', 'pct', 'pct1', 'pct3', 'duration', 'units'], true)) {
 			return 'num';
 		}
 
@@ -325,6 +325,10 @@ final class HtmlRenderer {
 			case 'int': return Format::int($value);
 			case 'number': return Format::number($value, 1);
 			case 'number2': return Format::number($value, 2);
+			case 'delta':
+				$v = (int) $value;
+
+				return $v === 0 ? '<span class="dim">0</span>' : self::e(($v > 0 ? '+' : '').Format::int($v));
 			case 'pp': return self::e(((float) $value >= 0 ? '+' : '').Format::number($value, 1).' pp');
 			case 'pct': return self::e(Format::pct($value, 2));
 			case 'pct1': return self::e(Format::pct($value, 1));

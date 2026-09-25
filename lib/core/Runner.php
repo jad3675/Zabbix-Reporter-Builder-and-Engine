@@ -38,6 +38,12 @@ final class Runner {
 
 		$ctx = new Context($guard, $period, $def, $scope, $limits);
 
+		if (!empty($def['compare'])) {
+			// Same scope, same client, the period before. Costs a second set of queries,
+			// so it is only built if a section asks for it.
+			$ctx->setPreviousFactory(static fn() => new Context($guard, $period->previous(), $def, $scope, $limits));
+		}
+
 		$sections = [];
 		$stopped = null;
 
@@ -46,7 +52,9 @@ final class Runner {
 			$entry = [
 				'type' => $s['type'],
 				'title' => $s['title'] !== '' ? $s['title'] : ($impl ? $impl->label() : $s['type']),
-				'description' => $impl ? $impl->description() : '',
+				'description' => (string) ($s['options']['intro'] ?? '') !== ''
+					? (string) $s['options']['intro']
+					: ($impl ? $impl->description() : ''),
 				'status' => 'ok',
 				'message' => '',
 				'blocks' => [],
@@ -99,6 +107,7 @@ final class Runner {
 				'unmatched_groups' => $scope['unmatched'],
 				'host_tags' => TagFilter::format($def['scope']['host_tags'])
 			],
+			'compare' => !empty($def['compare']),
 			'generated_at' => time(),
 			'stopped' => $stopped,
 			'stats' => $guard->stats() + ['seconds' => round(microtime(true) - $started, 2)],

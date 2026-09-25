@@ -23,9 +23,11 @@ final class Maintenance extends AbstractSection {
 	}
 
 	public function options(): array {
-		return [
-			['name' => 'display_limit', 'label' => 'Rows', 'type' => 'int', 'default' => 50, 'min' => 5, 'max' => 500]
-		];
+		return array_merge([
+			['name' => 'display_limit', 'label' => 'Rows', 'type' => 'int', 'default' => 50, 'min' => 5, 'max' => 500],
+			['name' => 'name_filter', 'label' => 'Only windows named', 'type' => 'text', 'default' => '',
+				'hint' => 'Comma-separated patterns. Leave empty for all.']
+		], self::commonOptions(false));
 	}
 
 	public function run(Context $ctx, array $o): SectionResult {
@@ -54,7 +56,7 @@ final class Maintenance extends AbstractSection {
 
 		$host_groups = [];
 
-		foreach ($ctx->hosts as $hostid => $h) {
+		foreach ($this->hosts($ctx, $o) as $hostid => $h) {
 			foreach ($h['groupids'] as $g) {
 				$host_groups[$g][] = $hostid;
 			}
@@ -62,15 +64,22 @@ final class Maintenance extends AbstractSection {
 
 		$rows = [];
 
+		$name_patterns = \Modules\Reporter\Lib\Core\Filters::patterns((string) $o['name_filter']);
+		$scope_hosts = $this->hosts($ctx, $o);
+
 		foreach ($found as $m) {
 			if ((int) $m['active_since'] > $till || (int) $m['active_till'] < $from) {
+				continue;
+			}
+
+			if ($name_patterns && !\Modules\Reporter\Lib\Core\Filters::matches((string) $m['name'], $name_patterns)) {
 				continue;
 			}
 
 			$affected = [];
 
 			foreach ($m['hosts'] ?? [] as $h) {
-				if (isset($ctx->hosts[$h['hostid']])) {
+				if (isset($scope_hosts[$h['hostid']])) {
 					$affected[$h['hostid']] = true;
 				}
 			}

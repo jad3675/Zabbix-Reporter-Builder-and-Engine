@@ -112,25 +112,39 @@ The same trust model as Zabbix's own scheduled reports:
 
 ## Building a report
 
-**Scope** is host groups (wildcards work: `CCH/*`) and optionally host tags, one per
-line: `site`, `site=Burnet`, `site~burn`, `site!=Lab`, `!decommissioned`. A report with no
+**Scope** is host groups (wildcards work: `Acme/*`) and optionally host tags, one per
+line: `site`, `site=Toronto`, `site~tor`, `site!=Lab`, `!decommissioned`. A report with no
 scope is refused.
 
 **Period** is previous month, previous week (Monday to Sunday), yesterday, month to date,
 or the last N days, in the report's time zone. The preview can override it, including
 custom dates.
 
+**Comparison** against the period before can be switched on per report. Headline numbers
+then read "43 problems, down 12" and the per-device table gains a change column. It
+doubles the queries, so it is off by default.
+
 **Sections**, in any order and any number (up to 20):
 
 | Section | What it shows |
 |---|---|
+| Written summary | free text from the account manager, at the top of the report |
 | Summary | devices, problems raised and resolved, median time to resolve, notifications, problems per day, notifications by media type |
 | Problems and notifications by device | per device: problems by severity, time in problem state, mean time to resolve, notifications sent and failed; optional roll-up by a host tag such as `site` |
-| Most frequent problems | the problems that fired most, with total and longest duration |
+| Most frequent problems | the problems that fired most, by trigger or by name across devices, with total and longest duration |
+| Response times | time to acknowledge and time to resolve, broken down by severity, device or host tag, plus the slowest to acknowledge |
+| Problem log | every problem, one row each: start, duration, status and notifications |
 | Top metrics | top or bottom N by any numeric metric, chosen by item tag, key or name pattern, with a daily trend line |
+| Time above threshold | hours each device spent above a value, whether or not a trigger fired |
 | Capacity outlook | days until volumes cross a threshold, from a straight-line fit of daily averages, with R² shown |
 | Availability | ICMP ping availability per device against a target |
+| Monitoring health | items not collecting and interfaces unreachable, by device |
+| Inventory summary | devices under management grouped by an inventory field: vendor, model, OS, location |
 | Maintenance windows | maintenance active during the period on devices in scope |
+
+Every section takes an intro paragraph in the customer's own words, and filters to skip
+devices by name pattern and (where it deals with problems) to skip problems by name, so
+"agent is not available" noise stays out of the numbers.
 
 Item selection defaults to the tags the official 7.x templates use (`component:cpu`,
 `component:storage`), so the same report works for agent and SNMP hosts.
@@ -154,8 +168,8 @@ server user (`www-data` on Ubuntu, `apache` on RHEL):
 cd /usr/share/zabbix/ui/modules/reporter
 sudo -u www-data php bin/reporter.php check              # settings, API, export support
 sudo -u www-data php bin/reporter.php test-mail you@example.com
-sudo -u www-data php bin/reporter.php run cch-monthly --period=previous_month --format=pdf,xlsx
-sudo -u www-data php bin/reporter.php run cch-monthly --from=2026-08-01 --till=2026-08-31 --mail
+sudo -u www-data php bin/reporter.php run acme-monthly --period=previous_month --format=pdf,xlsx
+sudo -u www-data php bin/reporter.php run acme-monthly --from=2026-08-01 --till=2026-08-31 --mail
 sudo -u www-data php bin/reporter.php run-due --dry-run
 ```
 
@@ -216,7 +230,7 @@ To remove the module as well: disable it in Zabbix, then delete the module direc
 
 ```sh
 php -d memory_limit=512M tests/run.php --out /tmp/out     # units + every section, all formats
-php -d memory_limit=1G tests/scale.php 2500 31            # a CCH-sized month
+php -d memory_limit=1G tests/scale.php 2500 31            # a 2,500-host month
 sh tests/runner_e2e.sh                                     # runner, settings, SMTP delivery
 php tests/zabbix_harness.php /path/to/zabbix/ui           # frontend against real Zabbix classes
 NODE_PATH=... node tests/ui_scripts.js /tmp/out           # editor and settings scripts (jsdom)

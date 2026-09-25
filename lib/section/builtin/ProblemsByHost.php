@@ -27,7 +27,7 @@ final class ProblemsByHost extends AbstractSection {
 	}
 
 	public function options(): array {
-		return [
+		return array_merge([
 			self::sevOption(),
 			['name' => 'group_by_tag', 'label' => 'Roll up by host tag', 'type' => 'text', 'default' => '',
 				'hint' => 'For example "site". Adds a summary table per tag value.'],
@@ -37,17 +37,23 @@ final class ProblemsByHost extends AbstractSection {
 			['name' => 'include_quiet', 'label' => 'List devices with no problems', 'type' => 'bool', 'default' => false],
 			['name' => 'display_limit', 'label' => 'Devices shown in the PDF', 'type' => 'int', 'default' => 50,
 				'min' => 5, 'max' => 500, 'hint' => 'The spreadsheet export always has every device.'],
-			['name' => 'chart', 'label' => 'Chart the top devices', 'type' => 'bool', 'default' => true]
-		];
+			['name' => 'chart', 'label' => 'Chart the top devices', 'type' => 'bool', 'default' => true],
+			['name' => 'count', 'label' => 'Count', 'type' => 'select', 'default' => 'all',
+				'choices' => ['all' => 'Every problem raised', 'resolved' => 'Only problems that were resolved']],
+			['name' => 'show_severity_columns', 'label' => 'Severity counts in the spreadsheet', 'type' => 'bool',
+				'default' => true],
+			['name' => 'show_mttr', 'label' => 'Mean time to resolve column', 'type' => 'bool', 'default' => true],
+			['name' => 'show_notifications', 'label' => 'Notification columns', 'type' => 'bool', 'default' => true]
+		], self::commonOptions());
 	}
 
 	public function run(Context $ctx, array $o): SectionResult {
-		$min = (int) $o['min_severity'];
 		$from = $ctx->period->from;
 		$till = $ctx->period->till;
+		$min = (int) $o['min_severity'];
 		$rows = [];
 
-		foreach ($ctx->hosts as $hostid => $host) {
+		foreach ($this->hosts($ctx, $o) as $hostid => $host) {
 			$rows[$hostid] = [
 				'host' => $host['name'],
 				'tag' => $o['group_by_tag'] !== '' ? $ctx->hostTag($hostid, $o['group_by_tag']) : '',
@@ -57,17 +63,18 @@ final class ProblemsByHost extends AbstractSection {
 				'ttr_sum' => 0,
 				'ttr_n' => 0,
 				'notifications' => 0,
-				'failed' => 0
+				'failed' => 0,
+				'change' => null
 			];
 		}
 
-		foreach ($ctx->problems() as $p) {
-			if ($p['severity'] < $min) {
-				continue;
-			}
-
+		foreach ($this->problems($ctx, $o) as $p) {
 			$open = Problems::openSeconds($p, $from, $till);
 			$resolved = $p['r_clock'] !== null && $p['r_clock'] <= $till;
+
+			if ($o['count'] === 'resolved' && !$resolved) {
+				continue;
+			}
 
 			foreach ($p['hostids'] as $h) {
 				if (!isset($rows[$h])) {
@@ -85,7 +92,7 @@ final class ProblemsByHost extends AbstractSection {
 			}
 		}
 
-		foreach ($ctx->alerts() as $a) {
+		foreach ($this->alerts($ctx, $o) as $a) {
 			foreach ($a['hostids'] as $h) {
 				if (!isset($rows[$h])) {
 					continue;
@@ -98,6 +105,24 @@ final class ProblemsByHost extends AbstractSection {
 					$rows[$h]['failed']++;
 				}
 			}
+		}
+
+		// Same devices over the previous period, for the change column.
+		$previous = $ctx->previous();
+
+		if ($previous !== null) {
+			$before = [];
+
+			foreach ($this->problems($ctx, $o, $previous) as $p) {
+				foreach ($p['hostids'] as $h) {
+					$before[$h] = ($before[$h] ?? 0) + 1;
+				}
+			}
+
+			foreach ($rows as $h => &$r) {
+				$r['change'] = $r['problems'] - ($before[$h] ?? 0);
+			}
+			unset($r);
 		}
 
 		$quiet = 0;
@@ -160,19 +185,30 @@ final class ProblemsByHost extends AbstractSection {
 
 		$columns[] = ['key' => 'sev', 'label' => 'Severity mix', 'format' => 'sevstrip', 'export' => false];
 
-		foreach (self::SEVERITIES as $s => $name) {
-			if ($s >= $min) {
-				$columns[] = ['key' => 'sev_'.$s, 'label' => $name, 'format' => 'int', 'screen' => false];
+		if ($o['show_severity_columns']) {
+			foreach (self::SEVERITIES as $s => $name) {
+				if ($s >= $min) {
+					$columns[] = ['key' => 'sev_'.$s, 'label' => $name, 'format' => 'int', 'screen' => false];
+				}
 			}
 		}
 
-		$columns = array_merge($columns, [
-			['key' => 'problems', 'label' => 'Problems', 'format' => 'int'],
-			['key' => 'open_time', 'label' => 'Time in problem state', 'format' => 'duration'],
-			['key' => 'mttr', 'label' => 'Mean time to resolve', 'format' => 'duration'],
-			['key' => 'notifications', 'label' => 'Notifications', 'format' => 'int'],
-			['key' => 'failed', 'label' => 'Failed', 'format' => 'int']
-		]);
+		$columns[] = ['key' => 'problems', 'label' => 'Problems', 'format' => 'int'];
+
+		if ($previous !== null) {
+			$columns[] = ['key' => 'change', 'label' => 'Change', 'format' => 'delta'];
+		}
+
+		$columns[] = ['key' => 'open_time', 'label' => 'Time in problem state', 'format' => 'duration'];
+
+		if ($o['show_mttr']) {
+			$columns[] = ['key' => 'mttr', 'label' => 'Mean time to resolve', 'format' => 'duration'];
+		}
+
+		if ($o['show_notifications']) {
+			$columns[] = ['key' => 'notifications', 'label' => 'Notifications', 'format' => 'int'];
+			$columns[] = ['key' => 'failed', 'label' => 'Failed', 'format' => 'int'];
+		}
 
 		$result->table('Devices', $columns, array_values($listed), [
 			'display_limit' => $o['display_limit'],
@@ -182,6 +218,10 @@ final class ProblemsByHost extends AbstractSection {
 
 		if (!$o['include_quiet'] && $quiet > 0) {
 			$result->note(sprintf('%d device(s) had no problems and sent no notifications and are not listed.', $quiet));
+		}
+
+		if ($o['count'] === 'resolved') {
+			$result->note('Only problems that were resolved inside the period are counted.');
 		}
 
 		$result->note('Time in problem state is clipped to the period; problems still open at the end count up to the period end.');

@@ -95,7 +95,7 @@ final class TableExport {
 		}
 
 		switch ($format) {
-			case 'int': return (int) round((float) $v);
+			case 'int': case 'delta': return (int) round((float) $v);
 			case 'number': case 'number2': case 'pp': case 'units': return round((float) $v, 4);
 			case 'pct': case 'pct1': case 'pct3': return round((float) $v, 4);
 			case 'duration': return round((float) $v / 3600, 3);

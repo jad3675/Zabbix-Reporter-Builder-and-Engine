@@ -11,12 +11,18 @@ namespace Modules\Reporter\Lib\Section;
 final class Registry {
 
 	private const BUILTIN = [
+		Builtin\Narrative::class,
 		Builtin\Summary::class,
 		Builtin\ProblemsByHost::class,
 		Builtin\TopTriggers::class,
 		Builtin\TopMetrics::class,
 		Builtin\CapacityGrowth::class,
 		Builtin\Availability::class,
+		Builtin\ResponseTimes::class,
+		Builtin\ProblemLog::class,
+		Builtin\ThresholdBreaches::class,
+		Builtin\MonitoringHealth::class,
+		Builtin\Inventory::class,
 		Builtin\Maintenance::class
 	];
 

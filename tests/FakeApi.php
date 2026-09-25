@@ -44,6 +44,22 @@ final class FakeApi implements ApiClient {
 			];
 		}
 
+		$vendors = ['Cisco', 'Arista', 'Dell', 'HPE'];
+
+		foreach ($this->hosts as $hid => &$h) {
+			$h['inventory'] = [
+				'type' => $h['groupid'] === '11' ? 'Server' : 'Switch',
+				'vendor' => $vendors[$hid % 4],
+				'model' => $vendors[$hid % 4].' '.(2000 + $hid % 9),
+				'os' => $h['groupid'] === '11' ? 'RHEL 10' : 'IOS-XE 17'
+			];
+			$h['interface'] = ['type' => $h['groupid'] === '11' ? '1' : '2', 'ip' => '10.0.0.'.($hid % 250),
+				'dns' => '', 'useip' => '1', 'port' => '161',
+				'available' => $hid % 19 === 0 ? '2' : '1',
+				'error' => $hid % 19 === 0 ? 'Timeout while connecting' : ''];
+		}
+		unset($h);
+
 		$this->hosts['99999'] = ['hostid' => '99999', 'host' => 'lab1', 'name' => 'lab1', 'groupid' => '12', 'tags' => []];
 
 		// Problems: noisy hosts get more; a few span the whole period; a burst shares one second.
@@ -110,8 +126,11 @@ final class FakeApi implements ApiClient {
 
 			foreach ($defs as [$name, $key, $units, $tags, $kind]) {
 				$id = (string) ++$iid;
+				$broken = $kind === 'net' && (int) $hid % 17 === 0;
 				$this->items[$id] = ['itemid' => $id, 'hostid' => $hid, 'name' => $name, 'key_' => $key, 'units' => $units,
-					'value_type' => $kind === 'ping' ? 3 : 0, 'status' => 0, 'tags' => $tags];
+					'value_type' => $kind === 'ping' ? 3 : 0, 'status' => 0, 'tags' => $tags,
+					'state' => $broken ? '1' : '0',
+					'error' => $broken ? 'Cannot connect to SNMP agent: timeout' : ''];
 
 				$this->trends[$id] = [$kind, mt_rand(5, 60), mt_rand(0, 100) / 100,
 					$hid % 13 === 0 ? mt_rand(0, 500) : -1];
@@ -209,8 +228,23 @@ final class FakeApi implements ApiClient {
 				}
 			}
 
-			$out[] = ['hostid' => $h['hostid'], 'host' => $h['host'], 'name' => $h['name'], 'tags' => $h['tags'],
+			$row = ['hostid' => $h['hostid'], 'host' => $h['host'], 'name' => $h['name'], 'tags' => $h['tags'],
 				'hostgroups' => [['groupid' => $h['groupid']]]];
+
+			if (isset($p['selectInterfaces'])) {
+				$row['interfaces'] = isset($h['interface']) ? [$h['interface']] : [];
+			}
+
+			if (isset($p['selectInventory'])) {
+				$fields = is_array($p['selectInventory']) ? $p['selectInventory'] : array_keys($h['inventory'] ?? []);
+				$row['inventory'] = [];
+
+				foreach ($fields as $f) {
+					$row['inventory'][$f] = $h['inventory'][$f] ?? '';
+				}
+			}
+
+			$out[] = $row;
 		}
 
 		return array_slice($out, 0, $p['limit'] ?? PHP_INT_MAX);
@@ -219,9 +253,26 @@ final class FakeApi implements ApiClient {
 	private function eventGet(array $p): array {
 		if (isset($p['eventids'])) {
 			$ids = array_flip(array_map('strval', $p['eventids']));
+			$out = [];
 
-			return array_values(array_map(static fn($e) => ['eventid' => $e['eventid'], 'clock' => $e['clock']],
-				array_filter($this->events, static fn($e) => isset($ids[$e['eventid']]))));
+			foreach ($this->events as $e) {
+				if (!isset($ids[$e['eventid']])) {
+					continue;
+				}
+
+				$row = ['eventid' => $e['eventid'], 'clock' => $e['clock']];
+
+				if (isset($p['selectAcknowledges'])) {
+					// Most problems get acknowledged; some never do.
+					$row['acknowledges'] = ((int) $e['eventid']) % 5 === 0
+						? []
+						: [['clock' => $e['clock'] + 120 + ((int) $e['eventid']) % 3600, 'action' => '2']];
+				}
+
+				$out[] = $row;
+			}
+
+			return $out;
 		}
 
 		$rows = array_filter($this->events, static fn($e) => $e['value'] === ($p['value'] ?? 1));
@@ -264,6 +315,14 @@ final class FakeApi implements ApiClient {
 
 		foreach ($this->items as $i) {
 			if (!isset($hostids[$i['hostid']])) {
+				continue;
+			}
+
+			if (isset($p['filter']['state']) && (string) $i['state'] !== (string) $p['filter']['state']) {
+				continue;
+			}
+
+			if (isset($p['filter']['value_type']) && !in_array((int) $i['value_type'], (array) $p['filter']['value_type'], true)) {
 				continue;
 			}
 

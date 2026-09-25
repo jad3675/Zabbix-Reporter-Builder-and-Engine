@@ -270,11 +270,14 @@ $fake = new FakeApi($period->from, $period->till, 60);
 	'id' => 'cch-monthly',
 	'name' => 'CCH monthly',
 	'timezone' => 'UTC',
+	'compare' => true,
 	'scope' => ['groups' => ['CCH/*']],
 	'branding' => ['title' => 'Monthly service report', 'customer' => "Cincinnati Children's", 'accent' => '#1f5f8b'],
 	'sections' => [
-		['type' => 'summary'],
-		['type' => 'problems_by_host', 'options' => ['group_by_tag' => 'site', 'display_limit' => 20]],
+		['type' => 'narrative', 'options' => ['text' => "First paragraph.\n\nSecond paragraph."]],
+		['type' => 'summary', 'options' => ['exclude_problems' => '*Unavailable by ICMP*']],
+		['type' => 'problems_by_host', 'options' => ['group_by_tag' => 'site', 'display_limit' => 20,
+			'exclude_problems' => '*Unavailable by ICMP*']],
 		['type' => 'top_triggers'],
 		['type' => 'top_metrics', 'title' => 'Busiest CPUs', 'options' => ['item_tags' => 'component=cpu']],
 		['type' => 'top_metrics', 'title' => 'Busiest uplinks', 'options' => ['item_tags' => 'component=network',
@@ -282,6 +285,11 @@ $fake = new FakeApi($period->from, $period->till, 60);
 		['type' => 'capacity_growth'],
 		['type' => 'availability', 'options' => ['show' => 'worst']],
 		['type' => 'maintenance'],
+		['type' => 'response_times', 'options' => ['group_by' => 'tag', 'tag' => 'site']],
+		['type' => 'problem_log', 'options' => ['sort' => 'duration']],
+		['type' => 'threshold_breaches', 'options' => ['item_tags' => 'component=cpu', 'threshold' => 60]],
+		['type' => 'monitoring_health'],
+		['type' => 'inventory', 'options' => ['field' => 'vendor', 'list_devices' => true]],
 		['type' => 'problems_by_hour']
 	]
 ], $drop_registry);
@@ -294,14 +302,16 @@ $limits['page_limit'] = 7;
 
 $report = (new Runner($drop_registry))->run($def, $period, $fake, $limits);
 $statuses = array_column($report['sections'], 'status');
-check('every section ran', $statuses === array_fill(0, 9, 'ok'),
+check('every section ran', $statuses === array_fill(0, 15, 'ok'),
 	json_encode(array_map(fn($s) => [$s['type'], $s['status'], $s['message']], $report['sections'])));
 check('lab host excluded by scope', $report['scope']['hosts'] === 60);
+
+$sections = array_column($report['sections'], null, 'type');
 
 // Cross-check the per-device table against the raw fake data.
 $devices = null;
 
-foreach ($report['sections'][1]['blocks'] as $b) {
+foreach ($sections['problems_by_host']['blocks'] as $b) {
 	if ($b['type'] === 'table' && $b['title'] === 'Devices') {
 		$devices = $b;
 	}
@@ -310,19 +320,38 @@ foreach ($report['sections'][1]['blocks'] as $b) {
 $total_from_table = array_sum(array_column($devices['rows'], 'problems'));
 $kpi_total = null;
 
-foreach ($report['sections'][0]['blocks'][0]['items'] as $k) {
+foreach ($sections['summary']['blocks'][0]['items'] as $k) {
 	if ($k['label'] === 'Problems raised') {
 		$kpi_total = $k['value'];
 	}
 }
 
 check('per-device totals equal summary total', $total_from_table === $kpi_total, "$total_from_table vs $kpi_total");
+
+// Sections that filter must not be counting what they filtered out. The problem log has
+// no exclusion set, so it still sees them.
+$logged = $sections['problem_log']['blocks'][0]['rows'];
+$icmp = array_filter($logged, static fn($r) => stripos($r['name'], 'Unavailable by ICMP') !== false);
+check('exclusion filter drops matching problems', $icmp !== [] && $kpi_total === count($logged) - count($icmp),
+	sprintf('%d logged, %d icmp, summary %d', count($logged), count($icmp), $kpi_total));
+check('comparison against the previous period appears', (bool) preg_match('/(up|down|unchanged) .*previous period/',
+	json_encode($sections['summary']['blocks'])));
+check('per-device table gains a change column', (bool) preg_grep('/delta/',
+	array_column($devices['columns'], 'format')));
+check('narrative renders both paragraphs', count($sections['narrative']['blocks']) === 2);
+check('monitoring health finds the broken items and interfaces',
+	$sections['monitoring_health']['blocks'][1]['rows'] !== [] && $sections['monitoring_health']['blocks'][2]['rows'] !== []);
+check('inventory groups by vendor', count($sections['inventory']['blocks'][2]['rows']) === 4,
+	json_encode(array_column($sections['inventory']['blocks'][2]['rows'], 'value')));
+check('response times computed', (bool) array_filter(array_column($sections['response_times']['blocks'][1]['rows'], 'mtta')));
+check('problem log lists every problem, including the excluded ones', count($logged) > $kpi_total);
+check('threshold breaches counted hours', (bool) array_filter(array_column($sections['threshold_breaches']['blocks'][2]['rows'], 'hours')));
 check('only write-free methods called', !preg_grep('/\.(create|update|delete)$/', $fake->calls));
 
 $counts = array_count_values($fake->calls);
 check('problems fetched once for all sections', ($counts['event.get'] ?? 0) < 60, json_encode($counts));
 
-$maint_rows = $report['sections'][7]['blocks'][0]['rows'];
+$maint_rows = $sections['maintenance']['blocks'][0]['rows'];
 check('maintenance outside period excluded', !in_array('Old window', array_column($maint_rows, 'name'), true));
 check('maintenance via host group counted', in_array('Server patching', array_column($maint_rows, 'name'), true));
 

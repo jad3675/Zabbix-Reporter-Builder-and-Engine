@@ -27,7 +27,7 @@ final class TopMetrics extends AbstractSection {
 	}
 
 	public function options(): array {
-		return [
+		return array_merge([
 			['name' => 'item_tags', 'label' => 'Item tags', 'type' => 'tags', 'default' => 'component=cpu',
 				'hint' => 'One per line: tag, tag=value, tag~contains, !tag'],
 			['name' => 'keys', 'label' => 'Item key patterns', 'type' => 'text', 'default' => '',
@@ -43,8 +43,12 @@ final class TopMetrics extends AbstractSection {
 				'hint' => 'When a device has several matching items, keep the one that ranks highest.'],
 			['name' => 'limit', 'label' => 'Rows', 'type' => 'int', 'default' => 15, 'min' => 1, 'max' => 200],
 			['name' => 'sparkline', 'label' => 'Daily trend line', 'type' => 'bool', 'default' => true],
-			['name' => 'chart', 'label' => 'Bar chart', 'type' => 'bool', 'default' => true]
-		];
+			['name' => 'chart', 'label' => 'Bar chart', 'type' => 'bool', 'default' => true],
+			['name' => 'min_value', 'label' => 'Ignore values below', 'type' => 'float', 'default' => 0,
+				'hint' => 'Keeps idle devices out of a "highest first" list.'],
+			['name' => 'units', 'label' => 'Units override', 'type' => 'text', 'default' => '',
+				'hint' => 'Leave empty to use the item\'s own units.']
+		], self::commonOptions(false));
 	}
 
 	public function validateOptions(array $o): array {
@@ -55,6 +59,8 @@ final class TopMetrics extends AbstractSection {
 
 	public function run(Context $ctx, array $o): SectionResult {
 		$items = $ctx->items(['tags' => $o['item_tags'], 'keys' => $o['keys'], 'names' => $o['names']]);
+		$hosts = $this->hosts($ctx, $o);
+		$items = array_filter($items, static fn($i) => isset($hosts[$i['hostid']]));
 		$result = new SectionResult();
 
 		if (!$items) {
@@ -66,8 +72,16 @@ final class TopMetrics extends AbstractSection {
 		$candidates = [];
 
 		foreach ($summary as $itemid => $s) {
+			if (!isset($items[$itemid])) {
+				continue;
+			}
+
 			$item = $items[$itemid];
 			$value = $s[$agg];
+
+			if ($value < (float) $o['min_value']) {
+				continue;
+			}
 
 			if ($o['per_host']) {
 				$h = $item['hostid'];
@@ -91,7 +105,7 @@ final class TopMetrics extends AbstractSection {
 				'value' => $value,
 				'avg' => $s['avg'],
 				'max' => $s['max'],
-				'units' => $item['units']
+				'units' => $o['units'] !== '' ? $o['units'] : $item['units']
 			];
 		}
 

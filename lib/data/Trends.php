@@ -97,6 +97,30 @@ final class Trends {
 	 * Items per call shrink as the period grows, so one response stays near
 	 * trend_rows_per_call rows whether the report covers a day or a year.
 	 */
+	/**
+	 * Hours in which an item was above a threshold, and its worst hour.
+	 *
+	 * @return array<string, array{hours: int, total: int, peak: float, last_above: int}>
+	 */
+	public static function hoursAbove(Context $ctx, array $itemids, float $threshold, string $field): array {
+		$acc = [];
+
+		self::each($ctx, $itemids, static function (array $t) use (&$acc, $threshold, $field): void {
+			$id = (string) $t['itemid'];
+			$value = (float) $t[$field];
+			$acc[$id] ??= ['hours' => 0, 'total' => 0, 'peak' => -INF, 'last_above' => 0];
+			$acc[$id]['total']++;
+			$acc[$id]['peak'] = max($acc[$id]['peak'], (float) $t['value_max']);
+
+			if ($value > $threshold) {
+				$acc[$id]['hours']++;
+				$acc[$id]['last_above'] = max($acc[$id]['last_above'], (int) $t['clock']);
+			}
+		});
+
+		return $acc;
+	}
+
 	private static function each(Context $ctx, array $itemids, callable $fn): void {
 		$hours = max(1, (int) ceil($ctx->period->seconds() / 3600));
 		$per_call = max(1, min($ctx->limit('chunk_trend_items', 50),
