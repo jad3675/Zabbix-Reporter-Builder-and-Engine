@@ -11,8 +11,6 @@ $tags_text = static function (array $filters): string {
 
 // Tag filters travel to the script as text in the one-per-line syntax.
 $definition = $data['definition'];
-$definition['scope']['host_tags'] = $tags_text($definition['scope']['host_tags']);
-$definition['scope']['groups'] = implode("\n", $definition['scope']['groups']);
 $definition['delivery']['email_to'] = implode(', ', $definition['delivery']['email_to']);
 
 $schemas = $data['schemas'];
@@ -48,7 +46,6 @@ window.reporterEditorInit = () => {
 		'definition' => $definition,
 		'original_id' => $data['original_id'],
 		'schemas' => $schemas,
-		'groups' => $data['group_names'],
 		'timezones' => $data['timezones'],
 		'period_types' => $data['period_types'],
 		'csrf_name' => CSRF_TOKEN_NAME,
@@ -60,11 +57,31 @@ window.reporterEditorInit = () => {
 			contains: `${t.tag}~${t.value}`, not_equals: `${t.tag}!=${t.value}`})[t.operator] || t.tag).join('\n')
 		: (v ?? '');
 
+	// Push a pasted scope back into the server-rendered pickers.
+	const applyScope = (scope) => {
+		document.getElementById('rpt-group-patterns').value = Array.isArray(scope.group_patterns)
+			? scope.group_patterns.join('\n') : (scope.group_patterns ?? '');
+		document.getElementById('rpt-host-tags').value = tagsToText(scope.host_tags);
+		document.getElementById('rpt-tag-logic').value = scope.tag_logic === 'or' ? 'or' : 'and';
+
+		// Names only: the multiselect needs ids, so anything pasted has to be re-picked.
+		for (const [id, names] of [['rpt-groups', scope.groups], ['rpt-hosts', scope.hosts]]) {
+			if (Array.isArray(names) && names.length) {
+				try {
+					jQuery('#' + id).multiSelect('clean');
+				}
+				catch (e) {}
+			}
+		}
+
+		if ((scope.groups || []).length || (scope.hosts || []).length) {
+			showErrors(['Groups and devices from the pasted JSON were cleared: pick them again so they resolve to this instance. Patterns and tags were kept.']);
+		}
+	};
+
 	// Accept stored-format JSON (arrays) as well as the editor's text format.
 	const fromStored = (def) => {
 		def.scope = def.scope || {};
-		def.scope.groups = Array.isArray(def.scope.groups) ? def.scope.groups.join('\n') : (def.scope.groups ?? '');
-		def.scope.host_tags = tagsToText(def.scope.host_tags);
 		def.delivery = def.delivery || {formats: ['pdf']};
 		def.delivery.email_to = Array.isArray(def.delivery.email_to)
 			? def.delivery.email_to.join(', ') : (def.delivery.email_to ?? '');
@@ -261,8 +278,6 @@ window.reporterEditorInit = () => {
 		const addType = select(CONFIG.schemas[0].type,
 			Object.fromEntries(CONFIG.schemas.map((s) => [s.type, s.label])), () => {});
 
-		const groupPicker = h('input', {type: 'text', list: 'rpt-group-list', placeholder: 'Find a host group'});
-		const groupsArea = area(d.scope.groups, (v) => d.scope.groups = v, 4, {spellcheck: 'false'});
 		const idInput = text(d.id, (v) => { d.id = v; idTouched = true; },
 			{maxlength: 64, pattern: '[a-z0-9][a-z0-9-]*', spellcheck: 'false'});
 
@@ -292,7 +307,7 @@ window.reporterEditorInit = () => {
 		const json = h('textarea', {rows: 18, class: 'rpt-mono', spellcheck: 'false'});
 		const details = h('details', {class: 'rpt-json', ontoggle: () => {
 			if (details.open) {
-				json.value = JSON.stringify(state, null, 2);
+				json.value = JSON.stringify(Object.assign({}, state, {scope: scope()}), null, 2);
 			}
 		}},
 			h('summary', {}, 'Definition as JSON'),
@@ -303,6 +318,7 @@ window.reporterEditorInit = () => {
 					const parsed = JSON.parse(json.value);
 					Object.keys(state).forEach((k) => delete state[k]);
 					Object.assign(state, fromStored(parsed));
+					applyScope(parsed.scope || {});
 					idTouched = true;
 					render();
 				}
@@ -313,7 +329,6 @@ window.reporterEditorInit = () => {
 		);
 
 		root.replaceChildren(
-			h('datalist', {id: 'rpt-group-list'}, CONFIG.groups.map((g) => h('option', {value: g}))),
 			h('datalist', {id: 'rpt-tz-list'}, CONFIG.timezones.map((t) => h('option', {value: t}))),
 
 			fieldset('Report',
@@ -322,27 +337,8 @@ window.reporterEditorInit = () => {
 				field('Description', area(d.description, (v) => d.description = v, 2, {maxlength: 1000}))
 			),
 
-			fieldset('Devices',
-				field('Host groups', h('div', {},
-					groupsArea,
-					h('div', {class: 'rpt-inline'}, groupPicker,
-						h('button', {type: 'button', class: 'btn-alt', onclick: () => {
-							const v = groupPicker.value.trim();
-
-							if (v) {
-								d.scope.groups = (d.scope.groups ? d.scope.groups.replace(/\s+$/, '') + '\n' : '') + v;
-								groupsArea.value = d.scope.groups;
-								groupPicker.value = '';
-							}
-						}}, 'Add')
-					)
-				), 'One per line. Wildcards work: Acme/* matches every group whose name starts with Acme/.'),
-				field('Host tags', area(d.scope.host_tags, (v) => d.scope.host_tags = v, 3,
-					{class: 'rpt-mono', spellcheck: 'false'}),
-					'Optional. One per line: site, site=Toronto, site~tor, site!=Lab, !decommissioned.'),
-				field('Tag logic', select(d.scope.tag_logic, {and: 'All tags must match', or: 'Any tag matches'},
-					(v) => d.scope.tag_logic = v))
-			),
+			// Rendered server-side with Zabbix's own multiselects; moved into place here.
+			document.getElementById('rpt-devices'),
 
 			fieldset('Period',
 				field('Covers', select(d.period.type, CONFIG.period_types, (v) => {
@@ -418,10 +414,28 @@ window.reporterEditorInit = () => {
 		errorBox.scrollIntoView({behavior: 'smooth', block: 'start'});
 	};
 
+	// The device pickers are Zabbix multiselects; ask them what is selected.
+	const picked = (id) => {
+		try {
+			return jQuery('#' + id).multiSelect('getData').map((entry) => entry.name);
+		}
+		catch (e) {
+			return [];
+		}
+	};
+
+	const scope = () => ({
+		groups: picked('rpt-groups'),
+		hosts: picked('rpt-hosts'),
+		group_patterns: document.getElementById('rpt-group-patterns').value,
+		host_tags: document.getElementById('rpt-host-tags').value,
+		tag_logic: document.getElementById('rpt-tag-logic').value
+	});
+
 	const save = () => {
 		const button = document.getElementById('rpt-save');
 		const body = new URLSearchParams();
-		body.append('definition', JSON.stringify(state));
+		body.append('definition', JSON.stringify(Object.assign({}, state, {scope: scope()})));
 		body.append('original_id', CONFIG.original_id);
 		body.append(CONFIG.csrf_name, CONFIG.csrf);
 

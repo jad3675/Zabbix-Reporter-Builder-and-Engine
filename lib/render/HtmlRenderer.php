@@ -87,6 +87,13 @@ final class HtmlRenderer {
 
 		$scope = [];
 
+		if ($r['scope']['named_hosts'] ?? []) {
+			$named = $r['scope']['named_hosts'];
+			$scope[] = count($named) <= 4
+				? self::e(implode(', ', $named))
+				: self::e(sprintf('%d named devices', count($named)));
+		}
+
 		if ($r['scope']['groups']) {
 			$groups = $r['scope']['groups'];
 			$shown = array_slice($groups, 0, 6);

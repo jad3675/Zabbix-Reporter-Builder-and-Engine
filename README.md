@@ -112,9 +112,20 @@ The same trust model as Zabbix's own scheduled reports:
 
 ## Building a report
 
-**Scope** is host groups (wildcards work: `Acme/*`) and optionally host tags, one per
-line: `site`, `site=Toronto`, `site~tor`, `site!=Lab`, `!decommissioned`. A report with no
-scope is refused.
+**Scope** has four parts, and a report can mix them:
+
+- **Host groups**, picked with the standard Zabbix group multiselect.
+- **Group name patterns** for groups that come and go, one per line: `Acme/*` matches
+  every group whose name starts with `Acme/`.
+- **Devices**, picked with the standard host multiselect, for the reports where naming
+  six switches beats inventing a group. Named devices are added on top of the groups,
+  whatever the tag filter says.
+- **Host tags**, applied to the groups, one per line: `site`, `site=Toronto`, `site~tor`,
+  `site!=Lab`, `!decommissioned`.
+
+A report with no scope at all is refused. Groups and devices are stored by name, so a
+definition copied to another instance resolves there; anything that does not resolve is
+reported instead of silently dropped.
 
 **Period** is previous month, previous week (Monday to Sunday), yesterday, month to date,
 or the last N days, in the report's time zone. The preview can override it, including
@@ -134,7 +145,7 @@ doubles the queries, so it is off by default.
 | Most frequent problems | the problems that fired most, by trigger or by name across devices, with total and longest duration |
 | Response times | time to acknowledge and time to resolve, broken down by severity, device or host tag, plus the slowest to acknowledge |
 | Problem log | every problem, one row each: start, duration, status and notifications |
-| Top metrics | top or bottom N by any numeric metric, chosen by item tag, key or name pattern, with a daily trend line |
+| Top metrics | either one ranking across devices, or the top items for each device, chosen by item tag, key or name pattern, with a daily trend line |
 | Time above threshold | hours each device spent above a value, whether or not a trigger fired |
 | Capacity outlook | days until volumes cross a threshold, from a straight-line fit of daily averages, with R² shown |
 | Availability | ICMP ping availability per device against a target |
@@ -147,7 +158,14 @@ devices by name pattern and (where it deals with problems) to skip problems by n
 "agent is not available" noise stays out of the numbers.
 
 Item selection defaults to the tags the official 7.x templates use (`component:cpu`,
-`component:storage`), so the same report works for agent and SNMP hosts.
+`component:storage`), so the same report works for agent and SNMP hosts. With several
+tags, **Tag logic** decides whether an item needs all of them or any one, so
+`component=cpu` plus `component=memory` with "any" covers both in a single section.
+
+**Top metrics** has two layouts. *One ranking across every device* answers "which
+devices are worst at this". *Top items for each device* answers "for each device, what
+are its busiest items", listing the device once with its top few items underneath. The
+spreadsheet export repeats the device name on every row so it can be sorted.
 
 **Branding**: title, customer, accent colour, paper size, footer. For a logo, put a PNG,
 JPEG or SVG in `<data_dir>/assets/` and enter its file name.

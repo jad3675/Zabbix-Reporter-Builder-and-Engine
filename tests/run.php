@@ -171,6 +171,10 @@ check('registry loads drop-ins cleanly', $registry->loadErrors() === [], implode
 [$def, $errors] = Definition::normalize(['id' => 'x'], $registry);
 check('definition requires scope and name', count($errors) >= 2);
 
+[$scoped] = Definition::normalize(['id' => 'a', 'name' => 'a', 'scope' => ['hosts' => "sw-1\nsw-2\nsw-1"],
+	'sections' => [['type' => 'summary']]], $registry);
+check('named devices are their own scope', $scoped['scope']['hosts'] === ['sw-1', 'sw-2']);
+
 [, $errors] = Definition::normalize(['id' => 'Bad ID!', 'name' => 'n', 'scope' => ['groups' => ['a']],
 	'sections' => [['type' => 'summary']]], $registry);
 check('definition rejects bad id', count($errors) === 1);
@@ -184,7 +188,8 @@ check('definition rejects bad id', count($errors) === 1);
 	'delivery' => ['email_to' => 'a@example.com, not-an-email']
 ], $registry);
 check('invalid timezone falls back', $def['timezone'] === 'UTC');
-check('groups deduplicated', $def['scope']['groups'] === ['CCH/*']);
+check('wildcards move to patterns and dedupe', $def['scope']['groups'] === []
+	&& $def['scope']['group_patterns'] === ['CCH/*'], json_encode($def['scope']));
 check('accent validated', $def['branding']['accent'] === '#1f5f8b');
 check('logo path traversal refused', $def['branding']['logo'] === '');
 check('options clamped and unknown dropped', $def['sections'][0]['options']['limit'] === 200
@@ -282,6 +287,12 @@ $fake = new FakeApi($period->from, $period->till, 60);
 		['type' => 'top_metrics', 'title' => 'Busiest CPUs', 'options' => ['item_tags' => 'component=cpu']],
 		['type' => 'top_metrics', 'title' => 'Busiest uplinks', 'options' => ['item_tags' => 'component=network',
 			'aggregate' => 'max']],
+		['type' => 'top_metrics', 'title' => 'Per device', 'options' => ['layout' => 'per_device',
+			'item_tags' => "component=cpu\ncomponent=network", 'tag_logic' => 'or', 'per_device_limit' => 2,
+			'limit' => 5, 'chart' => false]],
+		['type' => 'top_metrics', 'title' => 'Per device by name', 'options' => ['layout' => 'per_device',
+			'item_tags' => '', 'names' => '*cpu*, *memory*', 'per_device_limit' => 1, 'limit' => 3,
+			'chart' => false]],
 		['type' => 'capacity_growth'],
 		['type' => 'availability', 'options' => ['show' => 'worst']],
 		['type' => 'maintenance'],
@@ -302,9 +313,22 @@ $limits['page_limit'] = 7;
 
 $report = (new Runner($drop_registry))->run($def, $period, $fake, $limits);
 $statuses = array_column($report['sections'], 'status');
-check('every section ran', $statuses === array_fill(0, 15, 'ok'),
+check('every section ran', $statuses === array_fill(0, 17, 'ok'),
 	json_encode(array_map(fn($s) => [$s['type'], $s['status'], $s['message']], $report['sections'])));
 check('lab host excluded by scope', $report['scope']['hosts'] === 60);
+
+// A named device joins the scope even though it is in a group the report does not cover.
+$mixed = (new Runner($drop_registry))->run(
+	array_replace_recursive($def, ['sections' => [['type' => 'summary', 'title' => '', 'options' => []]],
+		'scope' => ['hosts' => ['lab1']]]),
+	$period, new FakeApi($period->from, $period->till, 60), $limits
+);
+check('named device added to a group scope', $mixed['scope']['hosts'] === 61, (string) $mixed['scope']['hosts']);
+check('unmatched names are reported', (new Runner($drop_registry))->run(
+	array_replace_recursive($def, ['sections' => [['type' => 'summary', 'title' => '', 'options' => []]],
+		'scope' => ['hosts' => ['nope-1']]]),
+	$period, new FakeApi($period->from, $period->till, 60), $limits
+)['scope']['unmatched_groups'] === ['nope-1']);
 
 $sections = array_column($report['sections'], null, 'type');
 
@@ -345,6 +369,56 @@ check('inventory groups by vendor', count($sections['inventory']['blocks'][2]['r
 	json_encode(array_column($sections['inventory']['blocks'][2]['rows'], 'value')));
 check('response times computed', (bool) array_filter(array_column($sections['response_times']['blocks'][1]['rows'], 'mtta')));
 check('problem log lists every problem, including the excluded ones', count($logged) > $kpi_total);
+// Per-device layout: five devices, two items each, device name printed once per device.
+$per_device = null;
+
+foreach ($report['sections'] as $section) {
+	if ($section['title'] === 'Per device') {
+		$per_device = $section;
+	}
+}
+
+$table_pd = null;
+
+foreach ($per_device['blocks'] as $b) {
+	if ($b['type'] === 'table') {
+		$table_pd = $b;
+	}
+}
+
+$rows_pd = $table_pd['rows'] ?? [];
+$named = array_values(array_filter($rows_pd, static fn($r) => $r['host_display'] !== ''));
+check('per-device layout groups by device', count($rows_pd) === 10 && count($named) === 5,
+	sprintf('%d rows, %d device headings', count($rows_pd), count($named)));
+check('per-device rows all carry the device for export', count(array_filter(array_column($rows_pd, 'host'))) === 10);
+check('tag logic "or" matched both components', count(array_unique(array_map(
+	static fn($r) => preg_match('/CPU/', $r['item']) ? 'cpu' : 'net', $rows_pd))) === 2);
+
+// Name patterns are matched the way the API searches: case-insensitively. And a CPU
+// percentage must not lose its place to memory measured in bytes.
+$by_name = null;
+
+foreach ($report['sections'] as $section) {
+	if ($section['title'] === 'Per device by name') {
+		$by_name = $section;
+	}
+}
+
+$name_rows = [];
+
+foreach ($by_name['blocks'] as $b) {
+	if ($b['type'] === 'table') {
+		$name_rows = $b['rows'];
+	}
+}
+
+check('case-insensitive patterns find "CPU utilization"',
+	(bool) array_filter($name_rows, static fn($r) => stripos($r['item'], 'CPU') !== false), json_encode(array_column($name_rows, 'item')));
+check('each pattern keeps its own slot per device',
+	count(array_unique(array_column($name_rows, 'group'))) === 2
+	&& count($name_rows) === 2 * count(array_unique(array_column($name_rows, 'host'))),
+	json_encode(array_map(static fn($r) => $r['group'].': '.$r['item'], $name_rows)));
+
 check('threshold breaches counted hours', (bool) array_filter(array_column($sections['threshold_breaches']['blocks'][2]['rows'], 'hours')));
 check('only write-free methods called', !preg_grep('/\.(create|update|delete)$/', $fake->calls));
 

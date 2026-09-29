@@ -16,7 +16,13 @@ const page = (file) => {
 	const w = dom.window;
 	const errors = [];
 	w.addEventListener('error', (e) => errors.push(e.message));
-	w.jQuery = (fn) => fn(w.jQuery);
+	// Zabbix's multiselect, as far as the editor is concerned.
+	const picks = {'rpt-groups': [{id: '10', name: 'Acme/Network'}], 'rpt-hosts': [{id: '10001', name: 'core-sw-01'}]};
+	w.jQuery = (arg) => {
+		if (typeof arg === 'function') return arg(w.jQuery);
+		const id = String(arg).replace('#', '');
+		return {multiSelect: (cmd) => cmd === 'getData' ? (picks[id] || []) : undefined};
+	};
 	w.HTMLElement.prototype.scrollIntoView = () => {};
 	w.document.body.innerHTML = html.replace(/<script>[\s\S]*?<\/script>/g, '');
 	const posted = [];
@@ -47,7 +53,6 @@ const page = (file) => {
 
 	setVal(byLabel('Name'), 'CCH Weekly Ops');
 	ok('ID follows the name', byLabel('ID').value === 'cch-weekly-ops', byLabel('ID').value);
-	setVal(byLabel('Host groups'), 'CCH/*');
 
 	const addSel = [...d.querySelectorAll('.rpt-inline select')].pop();
 	setVal(addSel, 'capacity_growth', 'change');
@@ -60,7 +65,7 @@ const page = (file) => {
 	await new Promise((r) => setTimeout(r, 10));
 	const def = JSON.parse(posted[0].body.get('definition'));
 	ok('save posts to reporter.save with CSRF token', posted[0].url.includes('reporter.save') && posted[0].body.get('_csrf_token'));
-	ok('posted definition has the edits', def.id === 'cch-weekly-ops' && def.scope.groups === 'CCH/*'
+	ok('posted definition has the edits', def.id === 'cch-weekly-ops'
 		&& def.sections.map((s) => s.type).join() === 'summary,capacity_growth,problems_by_host', JSON.stringify(def.sections.map((s) => s.type)));
 	ok('tag options travel as text', typeof def.sections[1].options.item_tags === 'string'
 		&& def.sections[1].options.item_tags === 'component=storage', JSON.stringify(def.sections[1].options.item_tags));
@@ -70,12 +75,15 @@ const page = (file) => {
 	d.querySelector('details.rpt-json').dispatchEvent(new w.Event('toggle'));
 	const ta = d.querySelector('details.rpt-json textarea');
 	const stored = JSON.parse(ta.value);
-	stored.scope.groups = ['A/*', 'B'];
-	stored.scope.host_tags = [{tag: 'site', operator: 'equals', value: 'Burnet'}, {tag: 'decom', operator: 'not_exists', value: ''}];
+	stored.scope.group_patterns = ['A/*', 'B/*'];
+	stored.scope.host_tags = [{tag: 'site', operator: 'equals', value: 'Toronto'}, {tag: 'decom', operator: 'not_exists', value: ''}];
 	ta.value = JSON.stringify(stored);
 	[...d.querySelectorAll('button')].find((b) => b.textContent === 'Apply JSON').click();
-	ok('stored-format JSON is accepted', byLabel('Host groups').value === 'A/*\nB' && byLabel('Host tags').value === 'site=Burnet\n!decom',
-		JSON.stringify([byLabel('Host groups').value, byLabel('Host tags').value]));
+	ok('pasted patterns and tags land in the fields', d.getElementById('rpt-group-patterns').value === 'A/*\nB/*'
+		&& d.getElementById('rpt-host-tags').value === 'site=Toronto\n!decom',
+		JSON.stringify([d.getElementById('rpt-group-patterns').value, d.getElementById('rpt-host-tags').value]));
+	ok('scope comes from the Zabbix pickers', def.scope.groups.join() === 'Acme/Network'
+		&& def.scope.hosts.join() === 'core-sw-01', JSON.stringify(def.scope));
 
 	// Settings.
 	({w, d, errors, posted} = page('settings.html'));

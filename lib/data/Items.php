@@ -15,7 +15,8 @@ use Modules\Reporter\Lib\Core\TagFilter;
 final class Items {
 
 	/**
-	 * @param array $selector  tags (TagFilter array), keys (string), names (string)
+	 * @param array $selector  tags (TagFilter array), keys (string), names (string),
+	 *                         tag_logic ("and" | "or")
 	 * @return array<string, array>  itemid => item
 	 */
 	public static function find(Context $ctx, array $selector): array {
@@ -52,6 +53,7 @@ final class Items {
 			foreach ($searches as $search) {
 				$params = [
 					'output' => ['itemid', 'hostid', 'name', 'key_', 'units', 'value_type'],
+					'selectTags' => ['tag', 'value'],
 					'hostids' => $hostids,
 					'monitored' => true,
 					'filter' => ['value_type' => [0, 3], 'status' => 0],
@@ -60,7 +62,7 @@ final class Items {
 
 				if ($tags) {
 					$params['tags'] = $tags;
-					$params['evaltype'] = 0;
+					$params['evaltype'] = ($selector['tag_logic'] ?? 'and') === 'or' ? 2 : 0;
 				}
 
 				if ($search !== null) {
@@ -83,7 +85,8 @@ final class Items {
 						'name' => (string) $item['name'],
 						'key' => (string) $item['key_'],
 						'units' => (string) $item['units'],
-						'value_type' => (int) $item['value_type']
+						'value_type' => (int) $item['value_type'],
+						'tags' => $item['tags'] ?? []
 					];
 				}
 
@@ -104,7 +107,9 @@ final class Items {
 
 	private static function matchesAny(string $subject, array $patterns): bool {
 		foreach ($patterns as $pattern) {
-			if (fnmatch($pattern, $subject, FNM_NOESCAPE)) {
+			// The API's own search is case-insensitive; this filter must agree with it,
+			// or "*cpu*" finds "CPU utilization" and then throws it away.
+			if (fnmatch($pattern, $subject, FNM_CASEFOLD | FNM_NOESCAPE)) {
 				return true;
 			}
 		}

@@ -54,8 +54,7 @@ class ReportList extends BaseAction {
 					'id' => (string) $id,
 					'name' => $def['name'] !== '' ? $def['name'] : (string) $id,
 					'description' => $def['description'],
-					'scope' => implode(', ', $def['scope']['groups'])
-						.($def['scope']['host_tags'] ? ' ['.str_replace("\n", ', ', TagFilter::format($def['scope']['host_tags'])).']' : ''),
+					'scope' => self::describeScope($def['scope']),
 					'period' => \Modules\Reporter\Lib\Core\Period::TYPES[$def['period']['type']]
 						.($def['period']['type'] === 'last_n_days' ? ' ('.$def['period']['n'].')' : ''),
 					'sections' => count($def['sections']),
@@ -70,6 +69,24 @@ class ReportList extends BaseAction {
 		}
 
 		$this->setResponse(new CControllerResponseData($data + ['title' => _('Report builder')]));
+	}
+
+	private static function describeScope(array $scope): string {
+		$parts = array_merge($scope['groups'], $scope['group_patterns']);
+
+		if ($scope['hosts']) {
+			$parts[] = count($scope['hosts']) <= 3
+				? implode(', ', $scope['hosts'])
+				: sprintf('%d named devices', count($scope['hosts']));
+		}
+
+		$out = implode(', ', $parts);
+
+		if ($scope['host_tags']) {
+			$out .= ' ['.str_replace("\n", ', ', TagFilter::format($scope['host_tags'])).']';
+		}
+
+		return $out;
 	}
 
 	private static function describeSchedule(array $def): string {

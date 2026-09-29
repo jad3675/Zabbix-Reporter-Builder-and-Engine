@@ -104,6 +104,8 @@ final class Runner {
 			'scope' => [
 				'hosts' => count($scope['hosts']),
 				'groups' => array_values($scope['groups']),
+				'group_patterns' => $def['scope']['group_patterns'],
+				'named_hosts' => $def['scope']['hosts'],
 				'unmatched_groups' => $scope['unmatched'],
 				'host_tags' => TagFilter::format($def['scope']['host_tags'])
 			],

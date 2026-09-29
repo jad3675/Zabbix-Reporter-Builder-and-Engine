@@ -59,14 +59,46 @@ class ReportEdit extends BaseAction {
 			$def['schedule']['enabled'] = false;
 		}
 
-		$groups = API::HostGroup()->get(['output' => ['name'], 'with_monitored_hosts' => true, 'limit' => 5000]);
+		// Multiselects need ids; definitions store names, so resolve what is selected.
+		$selected_groups = [];
+
+		if ($def['scope']['groups']) {
+			$found = API::HostGroup()->get(['output' => ['groupid', 'name'],
+				'filter' => ['name' => $def['scope']['groups']]]);
+
+			foreach (is_array($found) ? $found : [] as $g) {
+				$selected_groups[] = ['id' => $g['groupid'], 'name' => $g['name']];
+			}
+		}
+
+		$selected_hosts = [];
+
+		if ($def['scope']['hosts']) {
+			$found = API::Host()->get(['output' => ['hostid', 'name'], 'filter' => ['name' => $def['scope']['hosts']],
+				'monitored_hosts' => true]);
+
+			foreach (is_array($found) ? $found : [] as $h) {
+				$selected_hosts[] = ['id' => $h['hostid'], 'name' => $h['name']];
+			}
+		}
+
+		$missing = array_merge(
+			array_diff($def['scope']['groups'], array_column($selected_groups, 'name')),
+			array_diff($def['scope']['hosts'], array_column($selected_hosts, 'name'))
+		);
+
+		if ($missing) {
+			$error = sprintf('Not found, and dropped from the pickers unless you add them back: %s.',
+				implode(', ', $missing));
+		}
 
 		$this->setResponse(new CControllerResponseData([
 			'title' => $id !== '' && !$clone ? _('Edit report') : _('New report'),
 			'definition' => $def,
 			'original_id' => $clone ? '' : $id,
 			'schemas' => $this->registry()->schemas(),
-			'group_names' => array_values(array_column(is_array($groups) ? $groups : [], 'name')),
+			'selected_groups' => $selected_groups,
+			'selected_hosts' => $selected_hosts,
 			'timezones' => \DateTimeZone::listIdentifiers(),
 			'period_types' => Period::TYPES,
 			'csrf_save' => \CCsrfTokenHelper::get('reporter.save'),

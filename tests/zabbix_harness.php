@@ -213,7 +213,32 @@ $steps = [
 		save_out('edit.html', $html);
 		ok('edit renders with editor script', strpos($html, 'window.reporterEditorInit') !== false
 			&& strpos($html, '"problems_by_host"') !== false && strpos($html, '<script>') !== false);
-		ok('edit gets group names', in_array('CCH/Network', $data['group_names'], true));
+		ok('edit renders Zabbix multiselects for groups and devices',
+			substr_count($html, 'multiselect') >= 2 && strpos($html, 'rpt-hosts') !== false
+			&& strpos($html, 'rpt-groups') !== false);
+		ok('edit keeps the pickers inside a form', strpos($html, 'id="rpt-form"') !== false);
+	},
+	26 => function () {
+		// CMultiSelect checks its own options and reports a bad one through error(),
+		// which still renders the page but drops the option and shows a red message.
+		// CHtmlPage prints and clears those messages, so look in the output.
+		CMessageHelper::clear();
+		[, $r] = run_action('ReportEdit', 'reporter.edit', ['action' => 'reporter.edit']);
+		$html = html_entity_decode(render_view('reporter.edit', $r->getData()), ENT_QUOTES);
+		$errors = [];
+
+		foreach (['unsupported option', 'invalid property', 'msg-bad'] as $needle) {
+			if (stripos($html, $needle) !== false) {
+				$errors[] = $needle;
+			}
+		}
+
+		ok('the editor renders without Zabbix complaining about it', $errors === [], implode(', ', $errors));
+
+		// And both pickers survived: an option CMultiSelect rejects is silently dropped,
+		// so check the ones that matter are actually in the rendered popup parameters.
+		ok('pickers keep their filters', substr_count($html, '"monitored_hosts":"1"') === 2
+			&& strpos($html, '"enrich_parent_groups":"1"') !== false);
 	},
 	3 => function () use ($definition) {
 		ok('save without CSRF token is refused', denied(fn() => run_action('ReportSave', 'reporter.save',
@@ -243,8 +268,23 @@ $steps = [
 	},
 	8 => function () {
 		[, $r] = run_action('ReportEdit', 'reporter.edit', ['action' => 'reporter.edit', 'id' => 'cch-monthly']);
-		ok('edit loads existing', $r->getData()['definition']['name'] === 'CCH monthly');
-		render_view('reporter.edit', $r->getData());
+		$d = $r->getData();
+		ok('edit loads existing', $d['definition']['name'] === 'CCH monthly');
+		ok('selected groups resolved to ids for the picker', $d['selected_groups'] !== []
+			|| $d['definition']['scope']['groups'] === [], json_encode($d['selected_groups']));
+		render_view('reporter.edit', $d);
+	},
+	89 => function () {
+		// A definition naming a device that no longer exists must still open, with a note.
+		$store = new Modules\Reporter\Lib\Core\DefinitionStore();
+		$def = $store->load('cch-monthly');
+		$def['scope']['hosts'] = ['core-sw-mason-010', 'gone-forever'];
+		$store->save($def);
+		[, $r] = run_action('ReportEdit', 'reporter.edit', ['action' => 'reporter.edit', 'id' => 'cch-monthly']);
+		$d = $r->getData();
+		ok('device picker resolves the ones that exist', count($d['selected_hosts']) === 1, json_encode($d['selected_hosts']));
+		ok('missing device reported', strpos((string) $d['error'], 'gone-forever') !== false, (string) $d['error']);
+		render_view('reporter.edit', $d);
 	},
 	9 => function () {
 		[, $r] = run_action('ReportEdit', 'reporter.edit', ['action' => 'reporter.edit', 'id' => 'cch-monthly', 'clone' => '1']);
@@ -407,7 +447,8 @@ if ($step === null) {
 	$failed = 0;
 
 	$order = array_keys($steps);
-	usort($order, static fn($a, $b) => ($a > 100 ? $a / 10 : $a) <=> ($b > 100 ? $b / 10 : $b));
+	// Sub-steps are the parent's number with a digit appended: 89 runs after 8, 211 after 21.
+	usort($order, static fn($a, $b) => ($a > 25 ? $a / 10 : $a) <=> ($b > 25 ? $b / 10 : $b));
 
 	foreach ($order as $n) {
 		$cmd = sprintf('HARNESS_USER_TYPE=%d %s -d memory_limit=512M %s %s --step %d%s 2>&1', $user_type[$n] ?? USER_TYPE_SUPER_ADMIN,

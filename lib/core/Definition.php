@@ -22,7 +22,8 @@ final class Definition {
 			'timezone' => date_default_timezone_get(),
 			'period' => ['type' => 'previous_month', 'n' => 30],
 			'compare' => false,
-			'scope' => ['groups' => [], 'host_tags' => [], 'tag_logic' => 'and'],
+			'scope' => ['groups' => [], 'group_patterns' => [], 'hosts' => [], 'host_tags' => [],
+				'tag_logic' => 'and'],
 			'branding' => ['title' => 'Monthly service report', 'customer' => '', 'accent' => '#1f5f8b',
 				'logo' => '', 'paper' => 'Letter', 'footer' => ''],
 			'sections' => [
@@ -72,24 +73,41 @@ final class Definition {
 
 		// Scope.
 		$scope = is_array($in['scope'] ?? null) ? $in['scope'] : [];
-		$groups = $scope['groups'] ?? [];
 
-		if (is_string($groups)) {
-			$groups = preg_split('/\r\n|\r|\n/', $groups);
+		$names = static function ($value, int $max): array {
+			if (is_string($value)) {
+				$value = preg_split('/\r\n|\r|\n/', $value);
+			}
+
+			return array_slice(array_values(array_unique(array_filter(array_map(
+				static fn($v) => mb_substr(trim((string) $v), 0, 255), is_array($value) ? $value : []
+			), 'strlen'))), 0, $max);
+		};
+
+		$groups = $names($scope['groups'] ?? [], 200);
+		$patterns = $names($scope['group_patterns'] ?? [], 100);
+
+		// Older definitions kept wildcards in the group list; they belong with the patterns.
+		foreach ($groups as $i => $group) {
+			if (strpos($group, '*') !== false) {
+				$patterns[] = $group;
+				unset($groups[$i]);
+			}
 		}
 
 		$def['scope'] = [
-			'groups' => array_slice(array_values(array_unique(array_filter(array_map(
-				static fn($g) => mb_substr(trim((string) $g), 0, 255), is_array($groups) ? $groups : []
-			), 'strlen'))), 0, 100),
+			'groups' => array_values($groups),
+			'group_patterns' => array_slice(array_values(array_unique($patterns)), 0, 100),
+			'hosts' => $names($scope['hosts'] ?? [], 500),
 			'host_tags' => is_string($scope['host_tags'] ?? null)
 				? TagFilter::parse($scope['host_tags'])
 				: TagFilter::normalize($scope['host_tags'] ?? []),
 			'tag_logic' => ($scope['tag_logic'] ?? 'and') === 'or' ? 'or' : 'and'
 		];
 
-		if (!$def['scope']['groups'] && !$def['scope']['host_tags']) {
-			$errors[] = 'Scope needs at least one host group or host tag. A report over "everything" is refused on purpose.';
+		if (!$def['scope']['groups'] && !$def['scope']['group_patterns'] && !$def['scope']['hosts']
+				&& !$def['scope']['host_tags']) {
+			$errors[] = 'Scope needs at least one host group, group pattern, device or host tag. A report over "everything" is refused on purpose.';
 		}
 
 		// Branding.

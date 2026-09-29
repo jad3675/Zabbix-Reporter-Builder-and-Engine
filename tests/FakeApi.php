@@ -117,6 +117,13 @@ final class FakeApi implements ApiClient {
 					[['tag' => 'component', 'value' => 'network']], 'net']
 			];
 
+			// Mixed case and mixed units on purpose: "*cpu*" has to find "CPU utilization",
+			// and bytes must not out-rank percentages when both are listed per device.
+			$defs[] = ['Memory utilization', 'vm.memory.utilization', '%',
+				[['tag' => 'component', 'value' => 'memory']], 'memutil'];
+			$defs[] = ['Available memory', 'vm.memory.size[available]', 'B',
+				[['tag' => 'component', 'value' => 'memory']], 'memfree'];
+
 			if ($h['groupid'] === '11') {
 				$defs[] = ['FS [/var]: Space: Used, in %', 'vfs.fs.dependent.size[/var,pused]', '%',
 					[['tag' => 'component', 'value' => 'storage']], 'fs'];
@@ -206,6 +213,12 @@ final class FakeApi implements ApiClient {
 
 			if (isset($p['groupids']) && !in_array($h['groupid'], $p['groupids'], true)) {
 				continue;
+			}
+
+			foreach (['name', 'host'] as $field) {
+				if (isset($p['filter'][$field]) && !in_array($h[$field], (array) $p['filter'][$field], true)) {
+					continue 2;
+				}
 			}
 
 			if (isset($p['tags'])) {
@@ -326,23 +339,31 @@ final class FakeApi implements ApiClient {
 				continue;
 			}
 
-			if (isset($p['search']['key_']) && !fnmatch('*'.$p['search']['key_'].'*', $i['key_'], FNM_NOESCAPE)) {
-				continue;
+			// Zabbix uppercases both sides of the LIKE, so its search is case-insensitive.
+			foreach (['key_', 'name'] as $field) {
+				if (isset($p['search'][$field])
+						&& !fnmatch('*'.$p['search'][$field].'*', $i[$field], FNM_CASEFOLD | FNM_NOESCAPE)) {
+					continue 2;
+				}
 			}
 
-			if (isset($p['search']['name']) && !fnmatch('*'.$p['search']['name'].'*', $i['name'], FNM_NOESCAPE)) {
-				continue;
-			}
+			// evaltype 2 is "or", anything else is "and", as in the real API.
+			if ($p['tags'] ?? []) {
+				$or = (int) ($p['evaltype'] ?? 0) === 2;
+				$matched = 0;
 
-			foreach ($p['tags'] ?? [] as $t) {
-				$has = false;
+				foreach ($p['tags'] as $t) {
+					foreach ($i['tags'] as $it) {
+						if ($it['tag'] === $t['tag'] && ($t['operator'] === 4 || $it['value'] === $t['value'])) {
+							$matched++;
 
-				foreach ($i['tags'] as $it) {
-					$has = $has || ($it['tag'] === $t['tag'] && ($t['operator'] === 4 || $it['value'] === $t['value']));
+							break;
+						}
+					}
 				}
 
-				if (!$has) {
-					continue 2;
+				if ($or ? $matched === 0 : $matched < count($p['tags'])) {
+					continue;
 				}
 			}
 
@@ -373,6 +394,8 @@ final class FakeApi implements ApiClient {
 
 				switch ($kind) {
 					case 'cpu': $v = $base + 15 * sin($hour / 24 * M_PI * 2) + $noise; break;
+					case 'memutil': $v = 40 + $base / 3; break;
+					case 'memfree': $v = 8e9 + $base * 1e7; break;
 					case 'ping': $v = ($outage_hour >= 0 && $hour >= $outage_hour && $hour < $outage_hour + 5) ? 0.2 : 1.0; break;
 					case 'net': $v = $base * 1e7 * (1 + sin($hour / 24 * M_PI * 2) / 2); break;
 					case 'fs': $v = min(99, 40 + $base * 0.6 + $growth * $hour / 24); break;
