@@ -6,8 +6,8 @@ Preview in the browser, download as PDF, XLSX or CSV, or schedule delivery by em
 
 It is built to be safe to run against a production Zabbix:
 
-- It only reads. Every API call passes a guard that allows `.get` on nine object types
-  and refuses everything else.
+- It only reads. Every API call passes a guard that allows `.get` on a fixed list of
+  object types and refuses everything else.
 - Every run has a time, API-call, row and memory budget. A report that hits one stops,
   says which limit it hit, and marks the remaining sections as skipped. Nothing is
   silently truncated.
@@ -151,7 +151,35 @@ doubles the queries, so it is off by default.
 | Availability | ICMP ping availability per device against a target |
 | Monitoring health | items not collecting and interfaces unreachable, by device |
 | Inventory summary | devices under management grouped by an inventory field: vendor, model, OS, location |
+| Configuration changes | who changed what, from the Zabbix audit log, with each changed field on its own line |
 | Maintenance windows | maintenance active during the period on devices in scope |
+
+**Configuration changes** reads the Zabbix audit log. It flattens the details field, so a
+macro deleted inside a host update appears as its own line instead of hiding behind an
+"Update", and it collapses a bulk operation (one recordsetid, many objects) into a single
+row with a count. Ids are looked up and printed as names, so `hostgroup_rights[45].id: 197` reads
+`Servers/Linux (197)`, and coded values such as permission or GUI access are labelled.
+Where the shape is known and a whole object arrived at once, sibling fields are written
+as one sentence instead of one row each: an action condition becomes
+`Event tag value: notify.class contains cpu`, an operation becomes `Send message to user
+group NOC (24) via Email (HTML), escalation step 2`, a macro becomes
+`{$ALERT.CHANNEL:"cpu"} = ,email, (Set by Alert routing)`, and a permission becomes
+`Servers/Linux (197): Read`. Recovery and update operations compose the same way. Zabbix leaves out any field equal
+to its database default, so a plain message operation carries no operationtype and a host
+group condition no conditiontype; those defaults are filled back in. A partial update
+falls back to per-field rows, where seeing exactly which field moved matters more. Action condition types, operators and operation
+types are spelled out, so `conditiontype: 26` reads `Event tag value (26)`. An id whose object has since been deleted, or was renamed since, is named from the audit
+log itself; a live name always wins over that fallback. A change buried in a long description shows only the part that
+moved, rather than two truncated copies of the same paragraph. Internal link-table ids
+(rightid, hostmacroid and friends), uuids, the object's own id, and container rows whose
+children are already listed are dropped, which is most of the noise
+in a raw audit entry. Both cleanups can be switched off. Filters: configuration changes
+only, deletions only including nested ones, by resource, by user, and skipping the
+automation accounts. Two Zabbix limits
+apply: reading the audit log needs Super admin, so a scheduled run only includes this
+section if the API token belongs to one; and the audit housekeeping period decides how
+far back it goes. The audit log is instance-wide, so this section ignores the report's
+device scope.
 
 Every section takes an intro paragraph in the customer's own words, and filters to skip
 devices by name pattern and (where it deals with problems) to skip problems by name, so

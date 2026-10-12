@@ -2,10 +2,10 @@
     "manifest_version": 2.0,
     "id": "reporter",
     "name": "Report builder",
-    "version": "1.5.1",
+    "version": "1.7.2",
     "namespace": "Reporter",
     "author": "John Danhires",
-    "description": "Customer-facing reports built from sections: written summary, problems and notifications per device, response times, problem log, top metrics, time above threshold, capacity growth, availability, monitoring health, inventory and maintenance. PDF, XLSX and CSV. Read-only, budgeted, and scheduled from a CLI runner.",
+    "description": "Customer-facing reports built from sections: written summary, problems and notifications per device, response times, problem log, top metrics, time above threshold, capacity growth, availability, monitoring health, inventory, configuration changes and maintenance. PDF, XLSX and CSV. Read-only, budgeted, and scheduled from a CLI runner.",
     "actions": {
         "reporter.list": {
             "class": "ReportList",

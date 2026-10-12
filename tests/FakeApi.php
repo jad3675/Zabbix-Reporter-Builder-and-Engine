@@ -18,6 +18,7 @@ final class FakeApi implements ApiClient {
 	private array $items = [];
 	private array $trends = [];
 	private array $maintenances = [];
+	private array $audit = [];
 	private int $from;
 	private int $till;
 
@@ -183,6 +184,13 @@ final class FakeApi implements ApiClient {
 			case 'trend.get': return $this->trendGet($p);
 			case 'mediatype.get': return $this->mediatypeGet($p);
 			case 'maintenance.get': return $this->maintenanceGet($p);
+			case 'auditlog.get': return $this->auditGet($p);
+			case 'template.get': return $this->named($p, 'templateids', 'templateid', ['700' => 'Linux by SNMP',
+				'701' => 'Windows by SNMP']);
+			case 'templategroup.get': return $this->named($p, 'groupids', 'groupid', ['301' => 'Templates/Network']);
+			case 'usergroup.get': return $this->named($p, 'usrgrpids', 'usrgrpid', ['24' => 'Servers Test alerts']);
+			case 'user.get': return $this->named($p, 'userids', 'userid', ['1' => 'Admin', '4' => 'jdoe'], 'username');
+			case 'item.get.byids': return [];
 		}
 
 		throw new ApiException('FakeApi does not implement '.$method);
@@ -192,6 +200,10 @@ final class FakeApi implements ApiClient {
 		$out = [];
 
 		foreach ($this->groups as $g) {
+			if (isset($p['groupids']) && !in_array($g['groupid'], array_map('strval', (array) $p['groupids']), true)) {
+				continue;
+			}
+
 			if (isset($p['filter']['name']) && $g['name'] !== $p['filter']['name']) {
 				continue;
 			}
@@ -405,6 +417,138 @@ final class FakeApi implements ApiClient {
 				$v = max(0.0, (float) $v);
 				$out[] = ['itemid' => $id, 'clock' => $t, 'num' => 60, 'value_min' => $v * 0.9, 'value_avg' => $v,
 					'value_max' => $kind === 'ping' ? 1 : $v * 1.2];
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * A week of audit entries: a dashboard deletion, a host update that quietly deletes a
+	 * macro, a bulk template change sharing one recordsetid, a login, and a system entry.
+	 */
+	private function auditGet(array $p): array {
+		if ($this->audit === []) {
+			$t = $this->from + 3600;
+			$this->audit = [
+				['auditid' => 'a1', 'userid' => '1', 'username' => 'Admin', 'clock' => $t, 'ip' => '10.0.0.5',
+					'action' => '2', 'resourcetype' => '33', 'resourceid' => '501', 'resourcename' => 'NOC overview',
+					'recordsetid' => 'r1', 'details' => '[]'],
+				['auditid' => 'a2', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 600, 'ip' => '10.0.0.9',
+					'action' => '1', 'resourcetype' => '4', 'resourceid' => '10001', 'resourcename' => 'core-sw-mason-001',
+					'recordsetid' => 'r2', 'details' => json_encode([
+						'host.macros[1234]' => ['delete'],
+						'host.name' => ['update', 'core-sw-mason-001', 'sw-mason-001']
+					])],
+				['auditid' => 'a3', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 900, 'ip' => '10.0.0.9',
+					'action' => '1', 'resourcetype' => '30', 'resourceid' => '700', 'resourcename' => 'Linux by SNMP',
+					'recordsetid' => 'r3', 'details' => json_encode(['template.description' => ['update', 'new', 'old']])],
+				['auditid' => 'a4', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 901, 'ip' => '10.0.0.9',
+					'action' => '1', 'resourcetype' => '30', 'resourceid' => '701', 'resourcename' => 'Windows by SNMP',
+					'recordsetid' => 'r3', 'details' => json_encode(['template.description' => ['update', 'new', 'old']])],
+				['auditid' => 'a5', 'userid' => '7', 'username' => 'api-svc', 'clock' => $t + 1200, 'ip' => '10.0.0.20',
+					'action' => '0', 'resourcetype' => '4', 'resourceid' => '10950', 'resourcename' => 'drill-host-01',
+					'recordsetid' => 'r4', 'details' => json_encode(['host.host' => ['add', 'new-host-01']])],
+				['auditid' => 'a6', 'userid' => '1', 'username' => 'Admin', 'clock' => $t + 1500, 'ip' => '10.0.0.5',
+					'action' => '8', 'resourcetype' => '0', 'resourceid' => '1', 'resourcename' => 'Admin',
+					'recordsetid' => 'r5', 'details' => '[]'],
+				['auditid' => 'a9', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 1300, 'ip' => '10.0.0.9',
+					'action' => '0', 'resourcetype' => '30', 'resourceid' => '702',
+					'resourcename' => 'Notification policy', 'recordsetid' => 'r8', 'details' => json_encode([
+						'template.groups[903].groupid' => ['add', '301'],
+						'template.macros[8882].macro' => ['add', '{$ALERT.CHANNEL:"cpu"}'],
+						'template.macros[8882].value' => ['add', ',email,'],
+						'template.macros[8882].description' => ['add', 'Set by Alert routing'],
+						'template.uuid' => ['add', 'd93a6d58385f40bcafc85a58e379d2c8']
+					])],
+				['auditid' => 'a10', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 1350, 'ip' => '10.0.0.9',
+					'action' => '1', 'resourcetype' => '14', 'resourceid' => '12',
+					'resourcename' => 'Discovered hosts', 'recordsetid' => 'r9', 'details' => json_encode([
+						'hostgroup.hosts[904].hostid' => ['add', '10950']
+					])],
+				['auditid' => 'a11', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 1400, 'ip' => '10.0.0.9',
+					'action' => '0', 'resourcetype' => '5', 'resourceid' => '66', 'resourcename' => 'Rule: CPU alerts',
+					'recordsetid' => 'r10', 'details' => json_encode([
+						'action.esc_period' => ['add', '15m'],
+						'action.filter.conditions[20].conditiontype' => ['add', '26'],
+						'action.filter.conditions[20].formulaid' => ['add', 'A'],
+						'action.filter.conditions[20].operator' => ['add', '2'],
+						'action.filter.conditions[20].value' => ['add', 'cpu'],
+						'action.filter.conditions[20].value2' => ['add', 'notify.class'],
+						'action.filter.conditions[21].value' => ['add', '10'],
+						'action.operations[32].esc_step_from' => ['add', '2'],
+						'action.operations[32].esc_step_to' => ['add', '2'],
+						'action.operations[32].opmessage.mediatypeid' => ['add', '1'],
+						'action.operations[32].opmessage_grp[7].usrgrpid' => ['add', '24'],
+						'action.recovery_operations[33].operationtype' => ['add', '11'],
+						'action.recovery_operations[33].opmessage' => ['add'],
+						'action.recovery_operations[33].opmessage.mediatypeid' => ['add', '1']
+					])],
+				['auditid' => 'a13', 'userid' => '1', 'username' => 'Admin', 'clock' => $t + 1460, 'ip' => '10.0.0.5',
+					'action' => '1', 'resourcetype' => '3', 'resourceid' => '1', 'resourcename' => 'Gmail relay',
+					'recordsetid' => 'r12', 'details' => json_encode([
+						'mediatype.status' => ['update', '0', '1']
+					])],
+				['auditid' => 'a14', 'userid' => '1', 'username' => 'Admin', 'clock' => $t + 1470, 'ip' => '10.0.0.5',
+					'action' => '1', 'resourcetype' => '4', 'resourceid' => '10001',
+					'resourcename' => 'core-sw-mason-001', 'recordsetid' => 'r13', 'details' => json_encode([
+						'host.status' => ['update', '1', '0']
+					])],
+				['auditid' => 'a12', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 1450, 'ip' => '10.0.0.9',
+					'action' => '1', 'resourcetype' => '30', 'resourceid' => '703',
+					'resourcename' => 'Alert routing settings', 'recordsetid' => 'r11', 'details' => json_encode([
+						'template.description' => ['update',
+							str_repeat('Managed by the Alert routing module. ', 3).'Channels: email, sms.'
+								.str_repeat(' Do not edit by hand.', 3),
+							str_repeat('Managed by the Alert routing module. ', 3).'Channels: email.'
+								.str_repeat(' Do not edit by hand.', 3)]
+					])],
+				['auditid' => 'a8', 'userid' => '4', 'username' => 'jdoe', 'clock' => $t + 1700, 'ip' => '10.0.0.9',
+					'action' => '0', 'resourcetype' => '11', 'resourceid' => '24',
+					'resourcename' => 'Servers Test alerts', 'recordsetid' => 'r7', 'details' => json_encode([
+						'usergroup.gui_access' => ['add', '3'],
+						'usergroup.hostgroup_rights[45]' => ['add'],
+						'usergroup.hostgroup_rights[45].id' => ['add', '10'],
+						'usergroup.hostgroup_rights[45].permission' => ['add', '2'],
+						'usergroup.hostgroup_rights[45].rightid' => ['add', '45'],
+						'usergroup.name' => ['add', 'Servers Test alerts'],
+						'usergroup.usrgrpid' => ['add', '24']
+					])],
+				['auditid' => 'a7', 'userid' => '0', 'username' => '', 'clock' => $t + 1800, 'ip' => '',
+					'action' => '1', 'resourcetype' => '41', 'resourceid' => '0', 'resourcename' => 'Housekeeping',
+					'recordsetid' => 'r6', 'details' => '[]']
+			];
+		}
+
+		$out = [];
+
+		foreach ($this->audit as $e) {
+			if ($e['clock'] < ($p['time_from'] ?? 0) || $e['clock'] > ($p['time_till'] ?? PHP_INT_MAX)) {
+				continue;
+			}
+
+			foreach (['action', 'resourcetype'] as $field) {
+				if (isset($p['filter'][$field])
+						&& !in_array((int) $e[$field], array_map('intval', (array) $p['filter'][$field]), true)) {
+					continue 2;
+				}
+			}
+
+			$out[] = $e;
+		}
+
+		usort($out, static fn($a, $b) => [$a['clock'], $a['auditid']] <=> [$b['clock'], $b['auditid']]);
+
+		return array_slice($out, 0, $p['limit'] ?? PHP_INT_MAX);
+	}
+
+	/** Minimal name lookup for the object types the audit section resolves. */
+	private function named(array $p, string $param, string $id_field, array $names, string $field = 'name'): array {
+		$out = [];
+
+		foreach ((array) ($p[$param] ?? array_keys($names)) as $id) {
+			if (isset($names[(string) $id])) {
+				$out[] = [$id_field => (string) $id, $field => $names[(string) $id]];
 			}
 		}
 

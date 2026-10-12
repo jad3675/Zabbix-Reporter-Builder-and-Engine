@@ -23,6 +23,7 @@ final class Registry {
 		Builtin\ThresholdBreaches::class,
 		Builtin\MonitoringHealth::class,
 		Builtin\Inventory::class,
+		Builtin\AuditLog::class,
 		Builtin\Maintenance::class
 	];
 

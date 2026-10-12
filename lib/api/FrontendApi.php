@@ -18,7 +18,18 @@ final class FrontendApi implements ApiClient {
 		'alert' => 'Alert',
 		'problem' => 'Problem',
 		'maintenance' => 'Maintenance',
-		'mediatype' => 'MediaType'
+		'mediatype' => 'MediaType',
+		'auditlog' => 'AuditLog',
+		'template' => 'Template',
+		'templategroup' => 'TemplateGroup',
+		'trigger' => 'Trigger',
+		'usergroup' => 'UserGroup',
+		'user' => 'User',
+		'proxy' => 'Proxy',
+		'action' => 'Action',
+		'script' => 'Script',
+		'dashboard' => 'Dashboard',
+		'service' => 'Service'
 	];
 
 	public function call(string $method, array $params): array {

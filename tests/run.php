@@ -120,7 +120,12 @@ check('percent units', Format::units(93.456, '%') === '93.5%');
 $fake = new FakeApi(strtotime('2026-08-01 00:00 UTC'), strtotime('2026-08-31 23:59:59 UTC'), 12);
 $guard = new Guard($fake, ['time_budget' => 60, 'max_api_calls' => 10, 'max_rows_total' => 100000]);
 check('guard refuses writes', throws(fn() => $guard->call('host.update', []), ApiException::class));
-check('guard refuses unknown objects', throws(fn() => $guard->call('user.get', []), ApiException::class));
+check('guard refuses unknown objects', throws(fn() => $guard->call('usermacro.get', []), ApiException::class));
+check('guard allows the audit name lookups', !throws(fn() => $guard->call('hostgroup.get', ['output' => ['groupid']]),
+	ApiException::class));
+
+$guard = new Guard($fake, ['time_budget' => 60, 'max_api_calls' => 10, 'max_rows_total' => 100000]);
+
 for ($i = 0; $i < 10; $i++) {
 	$guard->call('hostgroup.get', ['output' => ['groupid']]);
 }
@@ -301,6 +306,7 @@ $fake = new FakeApi($period->from, $period->till, 60);
 		['type' => 'threshold_breaches', 'options' => ['item_tags' => 'component=cpu', 'threshold' => 60]],
 		['type' => 'monitoring_health'],
 		['type' => 'inventory', 'options' => ['field' => 'vendor', 'list_devices' => true]],
+		['type' => 'audit_log', 'options' => ['display_limit' => 20]],
 		['type' => 'problems_by_hour']
 	]
 ], $drop_registry);
@@ -313,7 +319,7 @@ $limits['page_limit'] = 7;
 
 $report = (new Runner($drop_registry))->run($def, $period, $fake, $limits);
 $statuses = array_column($report['sections'], 'status');
-check('every section ran', $statuses === array_fill(0, 17, 'ok'),
+check('every section ran', $statuses === array_fill(0, 18, 'ok'),
 	json_encode(array_map(fn($s) => [$s['type'], $s['status'], $s['message']], $report['sections'])));
 check('lab host excluded by scope', $report['scope']['hosts'] === 60);
 
@@ -418,6 +424,122 @@ check('each pattern keeps its own slot per device',
 	count(array_unique(array_column($name_rows, 'group'))) === 2
 	&& count($name_rows) === 2 * count(array_unique(array_column($name_rows, 'host'))),
 	json_encode(array_map(static fn($r) => $r['group'].': '.$r['item'], $name_rows)));
+
+// Audit log: details flattened, bulk operations collapsed, system and logins filtered.
+$audit_rows = [];
+
+foreach ($sections['audit_log']['blocks'] as $b) {
+	if ($b['type'] === 'table' && $b['title'] === 'Changes') {
+		$audit_rows = $b['rows'];
+	}
+}
+
+$audit_text = json_encode($audit_rows);
+check('audit log finds the deleted dashboard', (bool) preg_match('/NOC overview.*Delete|Delete.*NOC overview/', $audit_text));
+check('a macro deleted inside a host update gets its own row', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['field'], 'macros') !== false && $r['change'] === 'Deleted'), $audit_text);
+check('field updates show old and new', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'host.name' && strpos($r['change'], 'sw-mason-001 to core-sw-mason-001') !== false));
+check('bulk operation collapsed with a count', count(array_filter($audit_rows,
+	static fn($r) => $r['recordsetid'] === 'r3')) === 1
+	&& array_values(array_filter($audit_rows, static fn($r) => $r['recordsetid'] === 'r3'))[0]['objects'] === 2);
+check('logins and system entries left out by default', !preg_match('/Login|Housekeeping/', $audit_text));
+
+// Ids become names, codes become labels, and the plumbing rows are gone.
+$rights = array_values(array_filter($audit_rows, static fn($r) => strpos($r['field'], 'hostgroup_rights') !== false));
+check('a host group id is shown by name', (bool) array_filter($rights,
+	static fn($r) => strpos($r['change'], 'CCH/Network (10)') !== false), json_encode(array_column($rights, 'change')));
+check('a permission is written as one line', count($rights) === 1
+	&& strpos($rights[0]['change'], 'CCH/Network (10): Read') !== false, json_encode($rights));
+check('enum outside the id fields decoded', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'usergroup.gui_access' && strpos($r['change'], 'Disabled (3)') !== false));
+check('internal row ids dropped', !preg_match('/rightid|hostmacroid|hostgroupid/', $audit_text));
+check('the object\'s own id is dropped', !preg_match('/usergroup.usrgrpid/', $audit_text));
+check('per-field rows are gone once composed', !array_filter($audit_rows,
+	static fn($r) => strpos($r['field'], 'conditions[20].') !== false
+		|| strpos($r['field'], 'hostgroup_rights[45].') !== false));
+
+$audit_raw = (new Runner($drop_registry))->run(
+	array_replace_recursive($def, ['sections' => [['type' => 'audit_log', 'title' => '',
+		'options' => ['resolve_ids' => false, 'hide_internal_ids' => false, 'compose' => false,
+			'max_fields' => 50]]]]),
+	$period, new FakeApi($period->from, $period->till, 10), $limits
+);
+$raw_text = json_encode($audit_raw['sections'][0]['blocks']);
+check('a template group id resolves as a template group', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'template.groups[903].groupid'
+		&& strpos($r['change'], 'Templates/Network (301)') !== false),
+	json_encode(array_column($audit_rows, 'change')));
+check('a deleted object keeps the name the audit log remembers', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['field'], 'hosts[904].hostid') !== false
+		&& strpos($r['change'], 'drill-host-01 (10950)') !== false));
+// Six detail lines describing one condition become one sentence.
+$conditions = array_values(array_filter($audit_rows, static fn($r) => strpos($r['field'], 'conditions[') !== false));
+check('an action condition is written as one line', count($conditions) === 2
+	&& (bool) array_filter($conditions,
+		static fn($r) => strpos($r['change'], 'Event tag value: notify.class contains cpu') !== false),
+	json_encode(array_column($conditions, 'change')));
+check('a condition naming a host group resolves it', (bool) array_filter($conditions,
+	static fn($r) => strpos($r['change'], 'Host group equals CCH/Network (10)') !== false),
+	json_encode(array_column($conditions, 'change')));
+check('a live name beats the one the audit log remembers', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['change'], 'via Email (HTML)') !== false),
+	json_encode(array_values(array_filter(array_column($audit_rows, 'change'),
+		static fn($c) => strpos($c, 'via ') !== false))));
+check('media type status reads as enabled or disabled', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'mediatype.status' && strpos($r['change'], 'Disabled (1) to Enabled (0)') !== false),
+	json_encode(array_values(array_filter(array_column($audit_rows, 'change'),
+		static fn($c) => strpos($c, 'abled') !== false))));
+check('host status reads as monitored', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'host.status'
+		&& strpos($r['change'], 'Monitored (0) to Not monitored (1)') !== false));
+check('a composed condition keeps its formula letter', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'action.filter.conditions[20]' && strncmp($r['change'], 'Added: A:', 9) === 0),
+	json_encode(array_column($conditions, 'change')));
+check('a recovery operation composes too', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['field'], 'recovery_operations[') !== false
+		&& strpos($r['change'], 'Send recovery message via Email (HTML)') !== false),
+	json_encode(array_column($audit_rows, 'change')));
+check('fields Zabbix omits as defaults are filled back in', (bool) array_filter($audit_rows,
+	static fn($r) => $r['field'] === 'action.filter.conditions[21]'
+		&& strpos($r['change'], 'Host group equals CCH/Network (10)') !== false));
+check('an operation says who it messages and how', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['field'], 'operations[') !== false
+		&& strpos($r['change'], 'Send message to user group Servers Test alerts (24) via Email (HTML)') !== false
+		&& strpos($r['change'], 'escalation step 2') !== false),
+	json_encode(array_values(array_filter(array_column($audit_rows, 'change'),
+		static fn($c) => strpos($c, 'Send message') !== false))));
+check('a macro is written as one line', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['change'], '{$ALERT.CHANNEL:"cpu"} = ,email, (Set by Alert routing)') !== false),
+	json_encode(array_column($audit_rows, 'change')));
+check('a long text change shows only what changed', (bool) array_filter($audit_rows,
+	static fn($r) => strpos($r['change'], 'inside a longer text') !== false
+		&& strpos($r['change'], 'sms') !== false),
+	json_encode(array_values(array_filter(array_column($audit_rows, 'change'),
+		static fn($c) => strpos($c, 'longer text') !== false))));
+check('a delete with no details still says what happened', (bool) array_filter($audit_rows,
+	static fn($r) => $r['name'] === 'NOC overview' && $r['change'] === 'Deleted'));
+check('uuid hidden as noise', !preg_match('/uuid/', $audit_text));
+
+check('every cleanup can be turned off', strpos($raw_text, 'rightid') !== false
+	&& strpos($raw_text, 'CCH/Network (10)') === false
+	&& strpos($raw_text, 'conditions[20].conditiontype') !== false);
+
+$audit_deletes = (new Runner($drop_registry))->run(
+	array_replace_recursive($def, ['sections' => [['type' => 'audit_log', 'title' => '',
+		'options' => ['actions' => 'deletes']]]]),
+	$period, new FakeApi($period->from, $period->till, 10), $limits
+);
+$delete_rows = [];
+
+foreach ($audit_deletes['sections'][0]['blocks'] as $b) {
+	if ($b['type'] === 'table' && $b['title'] === 'Changes') {
+		$delete_rows = $b['rows'];
+	}
+}
+
+check('"deletions only" keeps the update that deleted a macro', count(array_unique(array_column($delete_rows, 'name'))) === 2,
+	json_encode(array_column($delete_rows, 'name')));
 
 check('threshold breaches counted hours', (bool) array_filter(array_column($sections['threshold_breaches']['blocks'][2]['rows'], 'hours')));
 check('only write-free methods called', !preg_grep('/\.(create|update|delete)$/', $fake->calls));

@@ -19,7 +19,8 @@ namespace Modules\Reporter\Lib\Api;
 final class Guard implements ApiClient {
 
 	private const ALLOWED = ['host', 'hostgroup', 'item', 'trend', 'event', 'alert', 'problem', 'maintenance',
-		'mediatype'];
+		'mediatype', 'auditlog', 'template', 'trigger', 'usergroup', 'user', 'proxy', 'action', 'script',
+		'dashboard', 'service', 'templategroup'];
 
 	private ApiClient $inner;
 	private float $deadline;
