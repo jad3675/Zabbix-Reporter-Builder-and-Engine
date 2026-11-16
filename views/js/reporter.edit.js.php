@@ -86,7 +86,7 @@ window.reporterEditorInit = () => {
 		def.delivery.email_to = Array.isArray(def.delivery.email_to)
 			? def.delivery.email_to.join(', ') : (def.delivery.email_to ?? '');
 		def.delivery.formats = def.delivery.formats || ['pdf'];
-		def.period = def.period || {type: 'previous_month', n: 30};
+		def.period = Object.assign({type: 'previous_month', n: 30, date: '', from: '', till: ''}, def.period || {});
 		def.branding = def.branding || {};
 		def.schedule = def.schedule || {enabled: false, cycle: 'monthly', day: 1, hour: 6};
 		def.sections = Array.isArray(def.sections) ? def.sections : [];
@@ -292,7 +292,48 @@ window.reporterEditorInit = () => {
 
 		const nField = number(d.period.n, (v) => d.period.n = v, {min: 1, max: 400});
 		const nRow = field('Days', nField);
-		nRow.hidden = d.period.type !== 'last_n_days';
+
+		// The browser's own calendar pickers. A range end stored as a bare date means the
+		// whole of that day, which a datetime-local input writes as midnight the day after.
+		const toLocal = (v, isEnd) => {
+			v = String(v || '').replace(' ', 'T');
+
+			if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+				if (!isEnd) {
+					return v + 'T00:00';
+				}
+
+				const next = new Date(v + 'T12:00:00');
+				next.setDate(next.getDate() + 1);
+
+				return next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0') + '-'
+					+ String(next.getDate()).padStart(2, '0') + 'T00:00';
+			}
+
+			return v.slice(0, 16);
+		};
+
+		const dayRow = field('Day', h('input', {type: 'date', value: d.period.date || '',
+			oninput: (e) => d.period.date = e.target.value}),
+			'The whole day, midnight to midnight in the report\'s time zone.');
+		const fromRow = field('From', h('input', {type: 'datetime-local', step: 60, value: toLocal(d.period.from, false),
+			oninput: (e) => d.period.from = e.target.value}));
+		const tillRow = field('Until', h('input', {type: 'datetime-local', step: 60, value: toLocal(d.period.till, true),
+			oninput: (e) => d.period.till = e.target.value}),
+			'Up to, not including, this minute: 08:00 to 17:00 ends at 16:59:59.');
+		const fixedHint = h('div', {class: 'rpt-field'}, h('span'), h('div', {class: 'rpt-control'},
+			h('div', {class: 'rpt-hint'}, 'Fixed dates run the same window every time, so a report that uses them cannot be scheduled. The preview can still switch to any other period.')));
+
+		const syncPeriod = () => {
+			const t = d.period.type;
+			nRow.hidden = t !== 'last_n_days';
+			dayRow.hidden = t !== 'day';
+			fromRow.hidden = t !== 'range';
+			tillRow.hidden = t !== 'range';
+			fixedHint.hidden = t !== 'day' && t !== 'range';
+		};
+
+		syncPeriod();
 
 		const formats = ['pdf', 'xlsx', 'csv'].map((f) => check(d.delivery.formats.includes(f), f.toUpperCase(), (on) => {
 			d.delivery.formats = on
@@ -343,9 +384,13 @@ window.reporterEditorInit = () => {
 			fieldset('Period',
 				field('Covers', select(d.period.type, CONFIG.period_types, (v) => {
 					d.period.type = v;
-					nRow.hidden = v !== 'last_n_days';
+					syncPeriod();
 				})),
 				nRow,
+				dayRow,
+				fromRow,
+				tillRow,
+				fixedHint,
 				h('div', {class: 'rpt-field'}, h('span'), h('div', {class: 'rpt-control'},
 					check(d.compare, 'Compare against the period before', (v) => d.compare = v),
 					h('div', {class: 'rpt-hint'}, 'Adds "up 4" or "down 12" next to the headline numbers and a change column per device. Doubles the queries, so leave it off for very large reports.'))),

@@ -20,6 +20,7 @@ class ReportExport extends BaseAction {
 			'format' => 'required|in pdf,xlsx,csv',
 			'period' => 'string',
 			'n' => 'int32',
+			'day' => 'string',
 			'from' => 'string',
 			'till' => 'string'
 		]);

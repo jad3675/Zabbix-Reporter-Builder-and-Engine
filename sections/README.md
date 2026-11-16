@@ -53,7 +53,7 @@ trends. If a query could be large, page it with `Data\Paginator::byClock()`.
 formats: `text`, `int`, `delta`, `number`, `number2`, `pp`, `pct`, `pct1`, `pct3`, `duration`,
 `units`, `date`, `datetime`, `severity`, `sevstrip`, `spark`. Mark a column
 `'export' => false` for screen-only visuals or `'screen' => false` for spreadsheet-only
-detail.
+detail, and `'nowrap' => true` to keep a short text value on one line.
 
 ## Why here and not in the data directory
 

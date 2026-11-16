@@ -55,8 +55,7 @@ class ReportList extends BaseAction {
 					'name' => $def['name'] !== '' ? $def['name'] : (string) $id,
 					'description' => $def['description'],
 					'scope' => self::describeScope($def['scope']),
-					'period' => \Modules\Reporter\Lib\Core\Period::TYPES[$def['period']['type']]
-						.($def['period']['type'] === 'last_n_days' ? ' ('.$def['period']['n'].')' : ''),
+					'period' => \Modules\Reporter\Lib\Core\Period::describe($def['period'], $def['timezone']),
 					'sections' => count($def['sections']),
 					'schedule' => $def['schedule']['enabled'] ? self::describeSchedule($def) : '',
 					'state' => \Modules\Reporter\Lib\Core\RunnerState::report((string) $id),

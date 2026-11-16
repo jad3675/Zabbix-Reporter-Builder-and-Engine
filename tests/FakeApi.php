@@ -132,6 +132,72 @@ final class FakeApi implements ApiClient {
 					[['tag' => 'component', 'value' => 'storage']], 'fs_flat'];
 			}
 
+			// Switch ports the interfaces section picks by description and name. Even hosts
+			// use the 7.x walk-based naming and the stock template's unresolved
+			// {#IFALIAS} tag, so the alias has to come from the item name; odd hosts use the
+			// older naming with resolved tags.
+			if ($h['groupid'] === '10') {
+				$walk = (int) $hid % 2 === 0;
+				$ports = [
+					[101, 'Gi1/0/49', 'Uplink to core-01', 1e9, 'ifnet'],
+					[102, 'Gi1/0/50', 'UPLINK - dist B', 1e9, 'ifnet'],
+					[103, 'Gi1/0/3', 'Printer 2F', 1e9, 'ifnet'],
+					[104, 'Te1/1/1', 'spare uplink', 1e10, 'idle'],
+					[105, 'Vlan10', 'uplink mgmt svi', 0, 'ifnet']
+				];
+
+				foreach ($ports as [$idx, $ifname, $alias, $speed, $traffic]) {
+					$label = $walk ? sprintf('Interface [%s(%s)]: ', $ifname, $alias) : sprintf('Interface %s(%s): ', $ifname, $alias);
+					// Real templates also tag these component=network; left off so the
+					// top-metrics tests keep counting one network item per device.
+					$ptags = [['tag' => 'interface', 'value' => $ifname],
+						['tag' => 'description', 'value' => $walk ? '{#IFALIAS}' : $alias]];
+					$metrics = [
+						['Bits received', $walk ? "net.if.in[ifHCInOctets.$idx]" : "net.if.in[ifHCInOctets.$idx]", 'bps', $traffic],
+						['Bits sent', "net.if.out[ifHCOutOctets.$idx]", 'bps', $traffic],
+						['Inbound packets with errors', $walk ? "net.if.in.errors[$idx]" : "net.if.in.errors[ifInErrors.$idx]", '', 'errs'],
+						['Outbound packets with errors', $walk ? "net.if.out.errors[$idx]" : "net.if.out.errors[ifOutErrors.$idx]", '', 'errs'],
+						['Inbound packets discarded', $walk ? "net.if.in.discards[$idx]" : "net.if.in.discards[ifInDiscards.$idx]", '', 'errs'],
+						['Outbound packets discarded', $walk ? "net.if.out.discards[$idx]" : "net.if.out.discards[ifOutDiscards.$idx]", '', 'errs'],
+						['Operational status', $walk ? "net.if.status[$idx]" : "net.if.status[ifOperStatus.$idx]", '', 'ifstatus']
+					];
+
+					if ($speed > 0) {
+						$metrics[] = ['Speed', $walk ? "net.if.speed[$idx]" : "net.if.speed[ifHighSpeed.$idx]", 'bps', 'speed'];
+					}
+
+					foreach ($metrics as [$suffix, $key, $units, $kind]) {
+						$id = (string) ++$iid;
+						$this->items[$id] = ['itemid' => $id, 'hostid' => $hid, 'name' => $label.$suffix, 'key_' => $key,
+							'units' => $units, 'value_type' => 3, 'status' => 0, 'tags' => $ptags, 'state' => '0', 'error' => ''];
+						// No mt_rand here: the seeded sequence the other tests rely on stays put.
+						$base = $kind === 'speed' ? $speed : 5 + crc32($hid.':'.$idx) % 60;
+						$growth = 0;
+						$outage = -1;
+
+						// Link state, for ifstatus items: [value while not up, hours not up,
+						// first hour not up]. A 3-hour drop that starts halfway through an
+						// hour; a link that goes lower-layer-down 10 hours before the end; a
+						// spare port that is never up.
+						if ($kind === 'ifstatus') {
+							$hours = (int) ceil(($till - $from) / 3600);
+
+							if ($idx === 101 && (int) $hid % 5 === 0) {
+								[$base, $growth, $outage] = [2, 3, 100];
+							}
+							elseif ($idx === 102 && (int) $hid % 7 === 0) {
+								[$base, $growth, $outage] = [7, 1000000, $hours - 10];
+							}
+							elseif ($idx === 104) {
+								[$base, $growth, $outage] = [2, 1000000, 0];
+							}
+						}
+
+						$this->trends[$id] = [$kind, $base, $growth, $outage];
+					}
+				}
+			}
+
 			foreach ($defs as [$name, $key, $units, $tags, $kind]) {
 				$id = (string) ++$iid;
 				$broken = $kind === 'net' && (int) $hid % 17 === 0;
@@ -156,8 +222,32 @@ final class FakeApi implements ApiClient {
 				'timeperiods' => [['timeperiod_type' => 3, 'period' => 14400]]],
 			['maintenanceid' => '3', 'name' => 'Old window', 'maintenance_type' => 0,
 				'active_since' => $from - 90 * 86400, 'active_till' => $from - 80 * 86400,
-				'hosts' => [['hostid' => '10002']], 'hostgroups' => [], 'timeperiods' => []]
+				'hosts' => [['hostid' => '10002']], 'hostgroups' => [], 'timeperiods' => []],
+			// Forgotten: a one-time period of 1,000 days, started 120 days before today, in
+			// a window that runs three more years.
+			['maintenanceid' => '4', 'name' => 'Core swap - remove after cutover', 'maintenance_type' => 0,
+				'active_since' => time() - 130 * 86400, 'active_till' => time() + 3 * 365 * 86400,
+				'hosts' => [['hostid' => '10002'], ['hostid' => '10005']], 'hostgroups' => [],
+				'timeperiods' => [['timeperiod_type' => 0, 'period' => 1000 * 86400, 'start_date' => time() - 120 * 86400]]]
 		];
+
+		// What the hosts say about it now: the servers inside this week's patching
+		// window for the last two hours, two switches stuck in the forgotten one.
+		foreach ($this->hosts as $hid => &$h) {
+			$h['maintenance_status'] = '0';
+			$h['maintenanceid'] = '0';
+			$h['maintenance_type'] = '0';
+			$h['maintenance_from'] = '0';
+
+			if (in_array((string) $hid, ['10002', '10005'], true)) {
+				[$h['maintenance_status'], $h['maintenanceid'], $h['maintenance_from']] = ['1', '4', (string) (time() - 120 * 86400)];
+			}
+			elseif ($h['groupid'] === '11') {
+				[$h['maintenance_status'], $h['maintenanceid'], $h['maintenance_type'], $h['maintenance_from']]
+					= ['1', '2', '1', (string) (time() - 7200)];
+			}
+		}
+		unset($h);
 	}
 
 	public function identity(): string {
@@ -227,6 +317,15 @@ final class FakeApi implements ApiClient {
 				continue;
 			}
 
+			if (isset($p['hostids']) && !in_array($h['hostid'], array_map('strval', (array) $p['hostids']), true)) {
+				continue;
+			}
+
+			if (isset($p['filter']['maintenance_status'])
+					&& (string) ($h['maintenance_status'] ?? '0') !== (string) $p['filter']['maintenance_status']) {
+				continue;
+			}
+
 			foreach (['name', 'host'] as $field) {
 				if (isset($p['filter'][$field]) && !in_array($h[$field], (array) $p['filter'][$field], true)) {
 					continue 2;
@@ -255,6 +354,10 @@ final class FakeApi implements ApiClient {
 
 			$row = ['hostid' => $h['hostid'], 'host' => $h['host'], 'name' => $h['name'], 'tags' => $h['tags'],
 				'hostgroups' => [['groupid' => $h['groupid']]]];
+
+			foreach (['maintenance_status', 'maintenanceid', 'maintenance_type', 'maintenance_from'] as $f) {
+				$row[$f] = $h[$f] ?? '0';
+			}
 
 			if (isset($p['selectInterfaces'])) {
 				$row['interfaces'] = isset($h['interface']) ? [$h['interface']] : [];
@@ -410,13 +513,30 @@ final class FakeApi implements ApiClient {
 					case 'memfree': $v = 8e9 + $base * 1e7; break;
 					case 'ping': $v = ($outage_hour >= 0 && $hour >= $outage_hour && $hour < $outage_hour + 5) ? 0.2 : 1.0; break;
 					case 'net': $v = $base * 1e7 * (1 + sin($hour / 24 * M_PI * 2) / 2); break;
+					// Peaks stay under a 1 Gbps link, except the busiest few, so the
+					// over-100% note has something to say.
+					case 'ifnet': $v = $base * 0.85e7 * (1 + sin($hour / 24 * M_PI * 2) / 2); break;
+					case 'idle': $v = 0.0; break;
+					case 'errs': $v = ($base % 7 === 0) ? 0.02 : 0.0; break;
+					case 'speed': $v = (float) $base; break;
+					case 'ifstatus': $v = ($outage_hour >= 0 && $hour >= $outage_hour && $hour < $outage_hour + $growth)
+						? (float) $base : 1.0; break;
 					case 'fs': $v = min(99, 40 + $base * 0.6 + $growth * $hour / 24); break;
 					default: $v = 35.0;
 				}
 
 				$v = max(0.0, (float) $v);
-				$out[] = ['itemid' => $id, 'clock' => $t, 'num' => 60, 'value_min' => $v * 0.9, 'value_avg' => $v,
-					'value_max' => $kind === 'ping' ? 1 : $v * 1.2];
+
+				// The hour before a drop that starts mid-hour: up for its first half.
+				if ($kind === 'ifstatus' && $outage_hour > 0 && $hour === $outage_hour - 1 && $growth < 1000) {
+					$out[] = ['itemid' => $id, 'clock' => $t, 'num' => 60, 'value_min' => 1.0,
+						'value_avg' => (1.0 + $base) / 2, 'value_max' => (float) $base];
+
+					continue;
+				}
+				$out[] = ['itemid' => $id, 'clock' => $t, 'num' => 60,
+					'value_min' => in_array($kind, ['ifstatus', 'speed'], true) ? $v : $v * 0.9, 'value_avg' => $v,
+					'value_max' => $kind === 'ping' ? 1 : (in_array($kind, ['ifstatus', 'speed'], true) ? $v : $v * 1.2)];
 			}
 		}
 
@@ -518,6 +638,22 @@ final class FakeApi implements ApiClient {
 					'action' => '1', 'resourcetype' => '41', 'resourceid' => '0', 'resourcename' => 'Housekeeping',
 					'recordsetid' => 'r6', 'details' => '[]']
 			];
+
+			// The forgotten window: created with one switch, the second added later by
+			// someone else. Dated from today, so these stay out of the August audit tests.
+			$this->audit[] = ['auditid' => 'm1', 'userid' => '6', 'username' => 'jsmith', 'clock' => time() - 121 * 86400,
+				'ip' => '10.0.0.7', 'action' => '0', 'resourcetype' => '27', 'resourceid' => '4',
+				'resourcename' => 'Core swap - remove after cutover', 'recordsetid' => 'm1', 'details' => json_encode([
+					'maintenance.name' => ['add', 'Core swap - remove after cutover'],
+					'maintenance.hosts[31]' => ['add'],
+					'maintenance.hosts[31].hostid' => ['add', '10002']
+				])];
+			$this->audit[] = ['auditid' => 'm2', 'userid' => '7', 'username' => 'mlee', 'clock' => time() - 60 * 86400,
+				'ip' => '10.0.0.8', 'action' => '1', 'resourcetype' => '27', 'resourceid' => '4',
+				'resourcename' => 'Core swap - remove after cutover', 'recordsetid' => 'm2', 'details' => json_encode([
+					'maintenance.hosts[32]' => ['add'],
+					'maintenance.hosts[32].hostid' => ['add', '10005']
+				])];
 		}
 
 		$out = [];
@@ -527,7 +663,7 @@ final class FakeApi implements ApiClient {
 				continue;
 			}
 
-			foreach (['action', 'resourcetype'] as $field) {
+			foreach (['action', 'resourcetype', 'resourceid'] as $field) {
 				if (isset($p['filter'][$field])
 						&& !in_array((int) $e[$field], array_map('intval', (array) $p['filter'][$field]), true)) {
 					continue 2;
@@ -585,6 +721,14 @@ final class FakeApi implements ApiClient {
 		$out = [];
 
 		foreach ($this->maintenances as $m) {
+			if (isset($p['maintenanceids'])) {
+				if (in_array($m['maintenanceid'], array_map('strval', (array) $p['maintenanceids']), true)) {
+					$out[] = $m;
+				}
+
+				continue;
+			}
+
 			$hit = false;
 
 			foreach ($m['hosts'] as $h) {

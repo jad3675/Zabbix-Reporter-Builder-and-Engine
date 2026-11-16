@@ -283,6 +283,11 @@ final class HtmlRenderer {
 	private static function align(array $c): string {
 		$format = $c['format'] ?? 'text';
 
+		if (!empty($c['nowrap']) && !in_array($format, ['int', 'delta', 'number', 'number2', 'pp', 'pct', 'pct1', 'pct3',
+				'duration', 'units', 'sevstrip', 'spark'], true)) {
+			return 'txt nw';
+		}
+
 		if (in_array($format, ['int', 'delta', 'number', 'number2', 'pp', 'pct', 'pct1', 'pct3', 'duration', 'units'], true)) {
 			return 'num';
 		}
@@ -407,6 +412,7 @@ table.data td { padding: 4px 6px; border-bottom: 1px solid #e6e9ef; vertical-ali
 table.data tr.odd td { background: #f5f7fa; }
 table.data .num { text-align: right; white-space: nowrap; }
 table.data .viz { white-space: nowrap; }
+table.data .nw { white-space: nowrap; }
 .dim, .empty, .more { color: #5b6577; }
 .more { font-size: {$small}; }
 .chart { margin: 8px 0 4px; }

@@ -73,22 +73,27 @@ abstract class BaseAction extends CController {
 	protected function periodFromInput(array $def): Period {
 		$type = $this->getInput('period', '');
 
-		if ($type === 'custom') {
-			return Period::custom($this->getInput('from', ''), $this->getInput('till', ''), $def['timezone']);
+		if ($type === 'day') {
+			return Period::day($this->getInput('day', ''), $def['timezone']);
+		}
+
+		// "custom" is what preview links from before 1.8 carry.
+		if ($type === 'range' || $type === 'custom') {
+			return Period::range($this->getInput('from', ''), $this->getInput('till', ''), $def['timezone']);
 		}
 
 		if ($type !== '' && array_key_exists($type, Period::TYPES)) {
 			return Period::resolve($type, (int) $this->getInput('n', $def['period']['n']), $def['timezone']);
 		}
 
-		return Period::resolve($def['period']['type'], (int) $def['period']['n'], $def['timezone']);
+		return Period::fromSpec($def['period'], $def['timezone']);
 	}
 
 	/** Period arguments to carry from the preview into export and print links. */
 	protected function periodArgs(): array {
 		$args = [];
 
-		foreach (['period', 'n', 'from', 'till'] as $key) {
+		foreach (['period', 'n', 'day', 'from', 'till'] as $key) {
 			if ($this->hasInput($key) && $this->getInput($key) !== '') {
 				$args[$key] = $this->getInput($key);
 			}

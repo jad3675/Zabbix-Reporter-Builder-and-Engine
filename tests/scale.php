@@ -1,9 +1,11 @@
 <?php declare(strict_types = 1);
 
 /*
- * php -d memory_limit=256M tests/scale.php [hosts] [days]
+ * php -d memory_limit=256M tests/scale.php [hosts] [days] [--cli]
  * Runs every built-in section over a large fake fleet and reports API calls, rows, time
- * and peak memory, with the production limits from manifest.json.
+ * and peak memory, with the production limits from manifest.json: the frontend's budget,
+ * or the CLI runner's with --cli. At 2,500 hosts the interfaces section (about 1,700
+ * uplinks for a month) needs the CLI budget; on the frontend's it stops on rows.
  */
 
 require __DIR__.'/../lib/bootstrap.php';
@@ -33,13 +35,16 @@ $base = memory_get_usage(true);
 $registry = new Registry();
 [$def, $errors] = Definition::normalize([
 	'id' => 'scale', 'name' => 'Scale', 'scope' => ['groups' => ['CCH/*']],
-	'sections' => array_map(static fn($t) => ['type' => $t, 'options' => ['include_quiet' => true]],
+	// One uplink per switch: about 1,700 ports, each read for a month.
+	'sections' => array_map(static fn($t) => ['type' => $t, 'options' => ['include_quiet' => true]
+		+ ($t === 'network_interfaces' ? ['alias' => 'uplink', 'name' => 'Gi1/0/49'] : [])],
 		array_keys($registry->all()))
 ], $registry);
 
 $limits = $config['limits'];
-$limits['max_rows_total'] = $limits['max_rows_frontend'];
-$limits['time_budget'] = $limits['time_budget_frontend'];
+$cli = in_array('--cli', $argv, true);
+$limits['max_rows_total'] = $cli ? $limits['max_rows_cli'] : $limits['max_rows_frontend'];
+$limits['time_budget'] = $cli ? $limits['time_budget_cli'] : $limits['time_budget_frontend'];
 
 $t = microtime(true);
 $report = (new Runner($registry))->run($def, $period, $fake, $limits);

@@ -85,6 +85,67 @@ const page = (file) => {
 	ok('scope comes from the Zabbix pickers', def.scope.groups.join() === 'Acme/Network'
 		&& def.scope.hosts.join() === 'core-sw-01', JSON.stringify(def.scope));
 
+	// Fixed periods in the editor: the right picker shows, and what is picked is posted.
+	const rowOf = (label) => byLabel(label) && byLabel(label).closest('.rpt-field');
+	setVal(byLabel('Covers'), 'day', 'change');
+	ok('picking "a single day" shows the date picker only', !rowOf('Day').hidden && rowOf('Days').hidden
+		&& rowOf('From').hidden && byLabel('Day').type === 'date');
+	setVal(byLabel('Day'), '2026-11-11');
+	setVal(byLabel('Covers'), 'range', 'change');
+	ok('picking a range shows two date-time pickers', rowOf('Day').hidden && !rowOf('From').hidden && !rowOf('Until').hidden
+		&& byLabel('From').type === 'datetime-local');
+	setVal(byLabel('From'), '2026-11-11T08:00');
+	setVal(byLabel('Until'), '2026-11-11T17:00');
+
+	// Every add re-renders the editor, so the earlier select is gone.
+	setVal([...d.querySelectorAll('.rpt-inline select')].pop(), 'network_interfaces', 'change');
+	[...d.querySelectorAll('button')].find((b) => b.textContent === 'Add section').click();
+	ok('interfaces section added with its filters', d.querySelectorAll('.rpt-card').length === 4
+		&& byLabel('Description (ifAlias) matches') && byLabel('Description (ifAlias) matches').value === '*uplink*'
+		&& byLabel('Interface name matches') && byLabel('When both are set'));
+	setVal(byLabel('Interface name matches'), 'Te1/1/*');
+	ok('link state filter offered', byLabel('Link state') && [...byLabel('Link state').options].map((o) => o.value).join()
+		=== 'all,not_up_any,not_up_end,never_up,up_all');
+	setVal(byLabel('Link state'), 'not_up_end', 'change');
+
+	const before = posted.length;
+	d.getElementById('rpt-save').click();
+	await new Promise((r) => setTimeout(r, 10));
+	const def2 = JSON.parse(posted[before].body.get('definition'));
+	ok('range is posted', def2.period.type === 'range' && def2.period.from === '2026-11-11T08:00'
+		&& def2.period.till === '2026-11-11T17:00', JSON.stringify(def2.period));
+	const ifs = def2.sections.find((x) => x.type === 'network_interfaces');
+	ok('interfaces options posted', ifs && ifs.options.alias === '*uplink*' && ifs.options.name === 'Te1/1/*'
+		&& ifs.options.sort === 'peak_util' && ifs.options.state === 'not_up_end', JSON.stringify(ifs && ifs.options));
+	ok('editor still error-free', errors.length === 0, errors.join('; '));
+	ok('the picked range survives a re-render', byLabel('From').value === '2026-11-11T08:00' && !rowOf('From').hidden);
+
+	// Preview toolbar.
+	({w, d, errors} = page('preview.html'));
+	ok('preview script runs without errors', errors.length === 0, errors.join('; '));
+	const period = d.getElementById('rpt-period');
+	const dayInput = d.getElementById('rpt-day');
+	const fromInput = d.querySelector('input[name=from]');
+	ok('preview starts with only the period select', dayInput.hidden && dayInput.disabled && fromInput.disabled
+		&& d.querySelector('input[name=n]').disabled);
+	setVal(period, 'day', 'change');
+	ok('single day enables the date and the step buttons', !dayInput.hidden && !dayInput.disabled
+		&& !d.getElementById('rpt-day-prev').hidden && fromInput.disabled);
+	let submitted = 0;
+	period.form.addEventListener('submit', (e) => { submitted++; e.preventDefault(); });
+	dayInput.value = '2026-03-01';
+	d.getElementById('rpt-day-prev').click();
+	ok('the day-before button steps back across a month end and submits', dayInput.value === '2026-02-28' && submitted === 1,
+		dayInput.value + ' / ' + submitted);
+	d.getElementById('rpt-day-next').click();
+	d.getElementById('rpt-day-next').click();
+	ok('the day-after button steps forward', dayInput.value === '2026-03-02', dayInput.value);
+	setVal(period, 'range', 'change');
+	ok('a range enables both date-time pickers and disables the day', !fromInput.disabled
+		&& !d.querySelector('input[name=till]').disabled && dayInput.disabled);
+	ok('only the inputs in use would go in the link', [...new w.FormData(period.form).keys()].sort().join()
+		=== 'action,from,id,period,till', [...new w.FormData(period.form).keys()].join());
+
 	// Settings.
 	({w, d, errors, posted} = page('settings.html'));
 	w.reporterSettingsInit();

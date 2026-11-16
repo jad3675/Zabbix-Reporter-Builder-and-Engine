@@ -21,6 +21,7 @@ final class Registry {
 		Builtin\ResponseTimes::class,
 		Builtin\ProblemLog::class,
 		Builtin\ThresholdBreaches::class,
+		Builtin\NetworkInterfaces::class,
 		Builtin\MonitoringHealth::class,
 		Builtin\Inventory::class,
 		Builtin\AuditLog::class,

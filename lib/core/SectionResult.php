@@ -15,7 +15,8 @@ namespace Modules\Reporter\Lib\Core;
  *
  * Column formats: text, int, number, pct, duration, units (uses the row's "units" key),
  * datetime, date, severity (0-5), sevstrip (array of six counts), spark (array of numbers).
- * A column can set 'export' => false (screen and PDF only) or 'screen' => false (export only).
+ * A column can set 'export' => false (screen and PDF only) or 'screen' => false (export only),
+ * and 'nowrap' => true to keep a short text value such as "1 Gbps" on one line.
  */
 final class SectionResult {
 

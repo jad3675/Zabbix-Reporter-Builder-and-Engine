@@ -100,7 +100,7 @@ final class Trends {
 	/**
 	 * Hours in which an item was above a threshold, and its worst hour.
 	 *
-	 * @return array<string, array{hours: int, total: int, peak: float, last_above: int}>
+	 * @return array<string, array{hours: int, total: int, peak: float, last_above: int, last: float, last_clock: int}>
 	 */
 	public static function hoursAbove(Context $ctx, array $itemids, float $threshold, string $field): array {
 		$acc = [];
@@ -108,13 +108,69 @@ final class Trends {
 		self::each($ctx, $itemids, static function (array $t) use (&$acc, $threshold, $field): void {
 			$id = (string) $t['itemid'];
 			$value = (float) $t[$field];
-			$acc[$id] ??= ['hours' => 0, 'total' => 0, 'peak' => -INF, 'last_above' => 0];
+			$clock = (int) $t['clock'];
+			$acc[$id] ??= ['hours' => 0, 'total' => 0, 'peak' => -INF, 'last_above' => 0, 'last' => 0.0, 'last_clock' => -1];
 			$acc[$id]['total']++;
 			$acc[$id]['peak'] = max($acc[$id]['peak'], (float) $t['value_max']);
+
+			// The hourly average of the last hour, as summary() reports it.
+			if ($clock >= $acc[$id]['last_clock']) {
+				$acc[$id]['last'] = (float) $t['value_avg'];
+				$acc[$id]['last_clock'] = $clock;
+			}
 
 			if ($value > $threshold) {
 				$acc[$id]['hours']++;
 				$acc[$id]['last_above'] = max($acc[$id]['last_above'], (int) $t['clock']);
+			}
+		});
+
+		return $acc;
+	}
+
+	/**
+	 * Link state from ifOperStatus-style items, where 1 is up and anything else is not
+	 * (2 down, 5 dormant, 7 lower layer down...). Per hour, from min, avg and max:
+	 * all 1 is an hour up, no 1 is an hour not up, and a mixed hour is split by its
+	 * average, f = (max - avg) / (max - 1), which is exact when the hour held 1 and one
+	 * other value, as a link going down or coming back does.
+	 *
+	 * @return array<string, array{hours: int, up_seconds: float, touched: int, last: float,
+	 *     last_min: float, last_max: float, last_clock: int, up_hours: int}>
+	 */
+	public static function linkState(Context $ctx, array $itemids): array {
+		$acc = [];
+
+		self::each($ctx, $itemids, static function (array $t) use (&$acc): void {
+			$id = (string) $t['itemid'];
+			$min = (float) $t['value_min'];
+			$avg = (float) $t['value_avg'];
+			$max = (float) $t['value_max'];
+			$clock = (int) $t['clock'];
+			$acc[$id] ??= ['hours' => 0, 'up_seconds' => 0.0, 'touched' => 0, 'up_hours' => 0, 'last' => 0.0,
+				'last_min' => 0.0, 'last_max' => 0.0, 'last_clock' => -1];
+			$a = &$acc[$id];
+			$a['hours']++;
+
+			if ($max <= 1.0 && $min >= 1.0) {
+				$up = 1.0;
+			}
+			elseif ($min > 1.0 || $max < 1.0) {
+				$up = 0.0;
+			}
+			else {
+				$up = $max > 1.0 ? max(0.0, min(1.0, ($max - $avg) / ($max - 1.0))) : 1.0;
+			}
+
+			$a['up_seconds'] += $up * 3600;
+			$a['touched'] += $up < 1.0 ? 1 : 0;
+			$a['up_hours'] += $up > 0.0 ? 1 : 0;
+
+			if ($clock >= $a['last_clock']) {
+				$a['last'] = $avg;
+				$a['last_min'] = $min;
+				$a['last_max'] = $max;
+				$a['last_clock'] = $clock;
 			}
 		});
 

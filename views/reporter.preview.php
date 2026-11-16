@@ -29,18 +29,31 @@ $page = (new CHtmlPage())
 
 // Period controls: a plain GET form, so every state of the preview has a shareable URL.
 $pi = $data['period_input'];
+$selected = $pi['period'] === 'custom' ? 'range' : $pi['period'];
 $period_select = (new CTag('select', true))->setAttribute('name', 'period')->setId('rpt-period');
 $period_select->addItem((new CTag('option', true, _('As defined in the report')))->setAttribute('value', ''));
 
-foreach ($data['period_types'] + ['custom' => _('Custom dates')] as $value => $label) {
+foreach ($data['period_types'] as $value => $label) {
 	$option = (new CTag('option', true, $label))->setAttribute('value', $value);
 
-	if ($pi['period'] === $value) {
+	if ($selected === $value) {
 		$option->setAttribute('selected', 'selected');
 	}
 
 	$period_select->addItem($option);
 }
+
+// A datetime-local input only takes YYYY-MM-DDTHH:MM. Links from before 1.8 carry bare
+// dates, where the end date meant "through the end of that day".
+$local = static function (string $value, bool $is_end): string {
+	$value = trim(str_replace(' ', 'T', $value));
+
+	if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+		return $is_end ? date('Y-m-d', strtotime($value.' +1 day')).'T00:00' : $value.'T00:00';
+	}
+
+	return preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/', $value) ? substr($value, 0, 16) : '';
+};
 
 $form = (new CForm('get'))
 	->addClass('rpt-toolbar')
@@ -52,10 +65,19 @@ $form = (new CForm('get'))
 		(new CTag('input', false))->setAttribute('type', 'number')->setAttribute('name', 'n')->setAttribute('min', 1)
 			->setAttribute('max', 400)->setAttribute('value', $pi['n'] !== '' ? $pi['n'] : 30)
 			->setAttribute('aria-label', _('Days'))->addClass('rpt-when-n rpt-num'),
-		(new CTag('input', false))->setAttribute('type', 'date')->setAttribute('name', 'from')
-			->setAttribute('value', $pi['from'])->setAttribute('aria-label', _('From'))->addClass('rpt-when-custom'),
-		(new CTag('input', false))->setAttribute('type', 'date')->setAttribute('name', 'till')
-			->setAttribute('value', $pi['till'])->setAttribute('aria-label', _('Until'))->addClass('rpt-when-custom'),
+		(new CButton('rpt-day-prev', '◀'))->setId('rpt-day-prev')->addClass(ZBX_STYLE_BTN_ALT)
+			->addClass('rpt-when-day rpt-step')->setAttribute('title', _('Day before')),
+		(new CTag('input', false))->setAttribute('type', 'date')->setAttribute('name', 'day')->setId('rpt-day')
+			->setAttribute('value', $pi['day'])->setAttribute('aria-label', _('Day'))->addClass('rpt-when-day'),
+		(new CButton('rpt-day-next', '▶'))->setId('rpt-day-next')->addClass(ZBX_STYLE_BTN_ALT)
+			->addClass('rpt-when-day rpt-step')->setAttribute('title', _('Day after')),
+		(new CTag('input', false))->setAttribute('type', 'datetime-local')->setAttribute('name', 'from')
+			->setAttribute('value', $local($pi['from'], false))->setAttribute('step', 60)
+			->setAttribute('aria-label', _('From'))->addClass('rpt-when-range'),
+		(new CSpan(_('to')))->addClass('rpt-when-range rpt-to'),
+		(new CTag('input', false))->setAttribute('type', 'datetime-local')->setAttribute('name', 'till')
+			->setAttribute('value', $local($pi['till'], true))->setAttribute('step', 60)
+			->setAttribute('aria-label', _('Until'))->addClass('rpt-when-range'),
 		(new CSubmitButton(_('Show')))->addClass(ZBX_STYLE_BTN_ALT)
 	]);
 
@@ -111,13 +133,37 @@ $page->show();
 (new CScriptTag('
 	(() => {
 		const select = document.getElementById("rpt-period");
+		const form = select.form;
 		const sync = () => {
-			document.querySelectorAll(".rpt-when-n").forEach((el) => el.hidden = select.value !== "last_n_days");
-			document.querySelectorAll(".rpt-when-custom").forEach((el) => el.hidden = select.value !== "custom");
+			const show = {"rpt-when-n": "last_n_days", "rpt-when-day": "day", "rpt-when-range": "range"};
+
+			for (const [cls, type] of Object.entries(show)) {
+				document.querySelectorAll("." + cls).forEach((el) => {
+					el.hidden = select.value !== type;
+
+					// Hidden inputs stay out of the URL, so a link carries only what it uses.
+					if (el.name) {
+						el.disabled = select.value !== type;
+					}
+				});
+			}
 		};
 
 		select.addEventListener("change", sync);
 		sync();
+
+		// Step the picked day back or forward and show it straight away.
+		const day = document.getElementById("rpt-day");
+		const step = (delta) => {
+			const base = day.value !== "" ? new Date(day.value + "T12:00:00") : new Date();
+			base.setDate(base.getDate() + delta);
+			day.value = base.getFullYear() + "-" + String(base.getMonth() + 1).padStart(2, "0") + "-"
+				+ String(base.getDate()).padStart(2, "0");
+			form.requestSubmit ? form.requestSubmit() : form.submit();
+		};
+
+		document.getElementById("rpt-day-prev").addEventListener("click", () => step(-1));
+		document.getElementById("rpt-day-next").addEventListener("click", () => step(1));
 
 		const send = document.getElementById("rpt-send");
 

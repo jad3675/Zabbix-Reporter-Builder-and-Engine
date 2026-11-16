@@ -100,7 +100,7 @@ class ReportEdit extends BaseAction {
 			'selected_groups' => $selected_groups,
 			'selected_hosts' => $selected_hosts,
 			'timezones' => \DateTimeZone::listIdentifiers(),
-			'period_types' => Period::TYPES,
+			'period_types' => Period::allTypes(),
 			'csrf_save' => \CCsrfTokenHelper::get('reporter.save'),
 			'error' => $error
 		]));

@@ -316,6 +316,71 @@ $steps = [
 			'period' => 'custom', 'from' => date('Y-m-d', $from), 'till' => date('Y-m-d', $from + 6 * 86400)]);
 		ok('custom period preview', $r->getData()['error'] === null, (string) $r->getData()['error']);
 	},
+	121 => function () {
+		$day = date('Y-m-d', strtotime('first day of last month +9 days'));
+		[, $r] = run_action('ReportPreview', 'reporter.preview', ['action' => 'reporter.preview', 'id' => 'cch-monthly',
+			'period' => 'day', 'day' => $day]);
+		$d = $r->getData();
+		ok('single day preview', $d['error'] === null && $d['period_label'] === date('l j F Y', strtotime($day)),
+			(string) ($d['error'] ?? $d['period_label']));
+		$html = render_view('reporter.preview', $d);
+		ok('day picker keeps the picked day', strpos($html, 'type="date" name="day"') !== false
+			&& strpos($html, 'value="'.$day.'"') !== false);
+		ok('downloads carry the picked day', (bool) preg_match('/reporter\.export[^"]*day='.preg_quote($day, '/').'/', $html));
+		ok('day stepping buttons render', strpos($html, 'id="rpt-day-prev"') !== false
+			&& strpos($html, 'id="rpt-day-next"') !== false);
+	},
+	122 => function () {
+		$day = date('Y-m-d', strtotime('first day of last month +3 days'));
+		[, $r] = run_action('ReportPreview', 'reporter.preview', ['action' => 'reporter.preview', 'id' => 'cch-monthly',
+			'period' => 'range', 'from' => $day.'T08:00', 'till' => $day.'T17:30']);
+		$d = $r->getData();
+		ok('time range preview', $d['error'] === null && strpos((string) $d['period_label'], '08:00 to 17:30') !== false,
+			(string) ($d['error'] ?? $d['period_label']));
+		$html = render_view('reporter.preview', $d);
+		ok('range pickers keep their values', strpos($html, 'type="datetime-local" name="from"') !== false
+			&& strpos($html, 'value="'.$day.'T08:00"') !== false && strpos($html, 'value="'.$day.'T17:30"') !== false);
+	},
+	123 => function () {
+		$day = date('Y-m-d', strtotime('first day of last month +3 days'));
+		[, $r] = run_action('ReportPreview', 'reporter.preview', ['action' => 'reporter.preview', 'id' => 'cch-monthly',
+			'period' => 'custom', 'from' => $day, 'till' => $day]);
+		$html = render_view('reporter.preview', $r->getData());
+		ok('old custom-date links still work and show as a range', $r->getData()['error'] === null
+			&& strpos($html, 'value="'.$day.'T00:00"') !== false
+			&& strpos($html, 'value="'.date('Y-m-d', strtotime($day.' +1 day')).'T00:00"') !== false);
+	},
+	124 => function () {
+		$def = json_decode((string) json_encode((new Modules\Reporter\Lib\Core\DefinitionStore())->load('cch-monthly')), true);
+		$def['id'] = 'pinned-day';
+		$def['period'] = ['type' => 'day', 'date' => date('Y-m-d', strtotime('-2 days'))];
+		$def['schedule']['enabled'] = true;
+		[, $r] = run_action('ReportSave', 'reporter.save', ['action' => 'reporter.save'],
+			['definition' => json_encode($def), 'original_id' => '', CSRF_TOKEN_NAME => CCsrfTokenHelper::get('reporter.save')]);
+		ok('a scheduled fixed day is refused', (bool) preg_grep('/cannot be scheduled/', json_of($r)['errors'] ?? []),
+			json_encode(json_of($r)));
+	},
+	125 => function () {
+		$def = json_decode((string) json_encode((new Modules\Reporter\Lib\Core\DefinitionStore())->load('cch-monthly')), true);
+		$def['id'] = 'pinned-day';
+		$def['period'] = ['type' => 'day', 'date' => date('Y-m-d', strtotime('-2 days'))];
+		$def['schedule']['enabled'] = false;
+		[, $r] = run_action('ReportSave', 'reporter.save', ['action' => 'reporter.save'],
+			['definition' => json_encode($def), 'original_id' => '', CSRF_TOKEN_NAME => CCsrfTokenHelper::get('reporter.save')]);
+		ok('an unscheduled fixed day saves', (json_of($r)['ok'] ?? false) === true, json_encode(json_of($r)));
+	},
+	126 => function () {
+		[, $r] = run_action('ReportList', 'reporter.list', ['action' => 'reporter.list']);
+		$html = render_view('reporter.list', $r->getData());
+		ok('list describes a fixed day by its date', strpos($html, date('l j F Y', strtotime('-2 days'))) !== false);
+	},
+	127 => function () {
+		[, $r] = run_action('ReportEdit', 'reporter.edit', ['action' => 'reporter.edit', 'id' => 'pinned-day']);
+		$d = $r->getData();
+		ok('editor offers the fixed periods', isset($d['period_types']['day'], $d['period_types']['range']));
+		ok('editor offers the interfaces section', in_array('network_interfaces', array_column($d['schemas'], 'type'), true));
+		render_view('reporter.edit', $d);
+	},
 	13 => function () {
 		[, $r] = run_action('ReportPreview', 'reporter.preview', ['action' => 'reporter.preview', 'id' => 'cch-monthly',
 			'period' => 'custom', 'from' => 'nonsense', 'till' => '']);

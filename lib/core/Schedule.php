@@ -17,7 +17,7 @@ final class Schedule {
 	public static function due(array $def, ?string $last_key, ?DateTimeImmutable $now = null): ?Period {
 		$s = $def['schedule'] ?? [];
 
-		if (empty($s['enabled'])) {
+		if (empty($s['enabled']) || Period::isFixed((string) ($def['period']['type'] ?? ''))) {
 			return null;
 		}
 

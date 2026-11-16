@@ -19,6 +19,7 @@ class ReportPreview extends BaseAction {
 			'id' => 'required|string',
 			'period' => 'string',
 			'n' => 'int32',
+			'day' => 'string',
 			'from' => 'string',
 			'till' => 'string',
 			'refresh' => 'in 0,1'
@@ -38,10 +39,11 @@ class ReportPreview extends BaseAction {
 			'can_edit' => $this->canEdit(),
 			'csrf_request' => \CCsrfTokenHelper::get('reporter.request'),
 			'recipients' => [],
-			'period_types' => Period::TYPES,
+			'period_types' => Period::allTypes(),
 			'period_input' => [
 				'period' => $this->getInput('period', ''),
 				'n' => $this->getInput('n', ''),
+				'day' => $this->getInput('day', ''),
 				'from' => $this->getInput('from', ''),
 				'till' => $this->getInput('till', '')
 			],

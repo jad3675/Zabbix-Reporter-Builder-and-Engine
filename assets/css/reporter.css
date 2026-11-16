@@ -83,6 +83,24 @@
 	width: 70px;
 }
 
+/* Zabbix styles buttons and inputs with an explicit display, which beats [hidden]. */
+.rpt-toolbar [hidden],
+.rpt-editor [hidden] {
+	display: none !important;
+}
+
+.rpt-toolbar .rpt-step {
+	min-width: 0;
+	padding: 0 8px;
+}
+
+.rpt-toolbar input[type="datetime-local"],
+.rpt-toolbar input[type="date"],
+.rpt-editor input[type="datetime-local"],
+.rpt-editor input[type="date"] {
+	min-width: 0;
+}
+
 .rpt-link {
 	margin-left: 4px;
 }

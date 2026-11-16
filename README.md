@@ -128,8 +128,15 @@ definition copied to another instance resolves there; anything that does not res
 reported instead of silently dropped.
 
 **Period** is previous month, previous week (Monday to Sunday), yesterday, month to date,
-or the last N days, in the report's time zone. The preview can override it, including
-custom dates.
+or the last N days, in the report's time zone. It can also be pinned to the calendar: a
+single day picked from a date picker, or a range from one date and time to another, to
+the minute. A range end is exclusive (08:00 to 17:00 stops at 16:59:59); a bare date as
+the end means the whole of that day. A report pinned to fixed dates cannot be scheduled,
+since it would send the same window every time.
+
+The preview can override the period with any of these. In single-day mode the ◀ and ▶
+buttons step a day back or forward and rerun, so "last Wednesday" is one click on the
+calendar. Downloads and the print view use whatever period the preview is showing.
 
 **Comparison** against the period before can be switched on per report. Headline numbers
 then read "43 problems, down 12" and the per-device table gains a change column. It
@@ -147,12 +154,62 @@ doubles the queries, so it is off by default.
 | Problem log | every problem, one row each: start, duration, status and notifications |
 | Top metrics | either one ranking across devices, or the top items for each device, chosen by item tag, key or name pattern, with a daily trend line |
 | Time above threshold | hours each device spent above a value, whether or not a trigger fired |
+| Network interfaces | ports picked by description (ifAlias), name and link state: speed, traffic in and out, peak utilization, errors and discards, status, uptime and time not up, daily trend |
 | Capacity outlook | days until volumes cross a threshold, from a straight-line fit of daily averages, with R² shown |
 | Availability | ICMP ping availability per device against a target |
 | Monitoring health | items not collecting and interfaces unreachable, by device |
 | Inventory summary | devices under management grouped by an inventory field: vendor, model, OS, location |
 | Configuration changes | who changed what, from the Zabbix audit log, with each changed field on its own line |
-| Maintenance windows | maintenance active during the period on devices in scope |
+| Maintenance windows | windows active during the period, and the devices in maintenance now: since when, due out when, who added them, and a flag on the ones nobody took out |
+
+**Network interfaces** rebuilds ports from the items interface discovery creates
+(`net.if.in`, `net.if.out`, `.errors`, `.discards`, `net.if.status`, `net.if.speed`),
+grouped by host and the index in the key. Both key styles are understood
+(`net.if.in.errors[ifInErrors.5]` and the 7.x walk-based `net.if.in.errors[5]`), as are
+agent keys (`net.if.in["eth0"]`). The description and name come from the `description`
+and `interface` tags, or from the item name (`Interface Gi1/0/5(Uplink): ...` or
+`Interface [Gi1/0/5(Uplink)]: ...`) when the tag is missing or holds the literal
+`{#IFALIAS}` some stock templates leave behind. Patterns are comma-separated and
+case-insensitive; a word with no wildcard matches anywhere, so `uplink` finds "Uplink to
+core" and "CORE-UPLINK". A description pattern or a name pattern is required, and the API
+search is narrowed by them, so a 48-port stack is not read whole to find its two
+uplinks. Utilization is traffic over the speed the port reports at the end of the
+period; ports with no speed item show traffic only. Errors and discards are totals
+estimated from hourly averages of the per-second rates.
+
+**Link state** comes from the operational status item (ifOperStatus): 1 is up, and 2
+(down), 7 (lower layer down) and every other value count as not up. The section can be
+limited to ports that were not up at some point, not up at the end of the period, not up
+at any time, or up the whole period, and shows each port's status at the end, its uptime
+and its time not up. These come from hourly trends: an hour in which the link changed is
+split by its average, which is exact for a single change in that hour. A port with no
+status item has no link state and is left out when one is picked, with a note.
+
+"Leave out interfaces with no traffic" drops unused ports: quiet and steady, always up or
+always down. A port whose link went down during the period is kept even with no traffic,
+and picking a link state turns the idle filter off, so a dead uplink is never hidden for
+being quiet.
+
+Each port reads up to eight items for the whole period (four without errors and
+discards), so a month of a few hundred ports is a frontend-sized job and a month of
+thousands belongs to the CLI runner. A pattern that matches too much fails that section
+with a message; the rest of the report still runs.
+
+The Zabbix API cannot see ifDescr: discovery reads it, then it is gone. The name pattern
+matches ifName, and also an `ifdescr` tag where one exists. To filter on ifDescr, add that
+tag (value `{#IFDESCR}`) to the item prototypes in your interface templates.
+
+**Maintenance windows** lists the windows active during the period and, separately, the
+devices in maintenance at the moment the report runs. Zabbix records on each host when
+its current maintenance period began, so the table shows how long each device has been
+in, when that period is due to end (the period's length, capped by the window's own
+end), and who added it, from the audit log. A device is flagged when it has been in
+longer than a set number of days (7 by default) or is not due out for more than a year.
+A recurring window resets the clock each time it opens, so a nightly window is not
+flagged; a one-time period someone set to 999 days is. "List only flagged devices" with
+"Devices in maintenance now only" makes a report of devices nobody took out. Who added a
+device needs Super admin to read the audit log; a device added through a host group has
+no entry of its own, and the audit log forgets what housekeeping removes.
 
 **Configuration changes** reads the Zabbix audit log. It flattens the details field, so a
 macro deleted inside a host update appears as its own line instead of hiding behind an
@@ -216,6 +273,8 @@ sudo -u www-data php bin/reporter.php check              # settings, API, export
 sudo -u www-data php bin/reporter.php test-mail you@example.com
 sudo -u www-data php bin/reporter.php run acme-monthly --period=previous_month --format=pdf,xlsx
 sudo -u www-data php bin/reporter.php run acme-monthly --from=2026-08-01 --till=2026-08-31 --mail
+sudo -u www-data php bin/reporter.php run acme-monthly --day=2026-11-11
+sudo -u www-data php bin/reporter.php run acme-monthly --from="2026-11-11 08:00" --till="2026-11-11 17:00"
 sudo -u www-data php bin/reporter.php run-due --dry-run
 ```
 
@@ -267,6 +326,10 @@ To remove the module as well: disable it in Zabbix, then delete the module direc
 - Problems are counted in the period they were raised. A problem raised before the
   period and still open counts in the earlier period.
 - Availability includes maintenance windows.
+- A time range reads hourly trends, so its edges are hour-aligned for metric sections:
+  a range starting at 08:30 leaves the 08:00 hour out of traffic and CPU figures.
+  Problems and notifications use the exact minute.
+- Network interfaces cannot filter on ifDescr unless a template exposes it (see above).
 - Media type names are visible only to Super admins. The Settings page records them each
   time it is saved, so reports run by other users still show names.
 - The email body is plain text with the files attached.
@@ -276,7 +339,8 @@ To remove the module as well: disable it in Zabbix, then delete the module direc
 
 ```sh
 php -d memory_limit=512M tests/run.php --out /tmp/out     # units + every section, all formats
-php -d memory_limit=1G tests/scale.php 2500 31            # a 2,500-host month
+php -d memory_limit=1G tests/scale.php 2500 31            # a 2,500-host month, frontend budget
+php -d memory_limit=1G tests/scale.php 2500 31 --cli      # the same with the CLI runner's budget
 sh tests/runner_e2e.sh                                     # runner, settings, SMTP delivery
 php tests/zabbix_harness.php /path/to/zabbix/ui           # frontend against real Zabbix classes
 NODE_PATH=... node tests/ui_scripts.js /tmp/out           # editor and settings scripts (jsdom)

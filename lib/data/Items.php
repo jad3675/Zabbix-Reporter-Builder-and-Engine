@@ -91,7 +91,7 @@ final class Items {
 				}
 
 				if (count($items) > $max) {
-					throw new \Modules\Reporter\Lib\Api\BudgetExceeded(sprintf(
+					throw new SelectorTooBroad(sprintf(
 						'More than %d items match this selector. Tighten the tags or patterns.', $max
 					));
 				}

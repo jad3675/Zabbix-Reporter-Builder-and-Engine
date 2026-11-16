@@ -20,7 +20,7 @@ final class Definition {
 			'name' => '',
 			'description' => '',
 			'timezone' => date_default_timezone_get(),
-			'period' => ['type' => 'previous_month', 'n' => 30],
+			'period' => ['type' => 'previous_month', 'n' => 30, 'date' => '', 'from' => '', 'till' => ''],
 			'compare' => false,
 			'scope' => ['groups' => [], 'group_patterns' => [], 'hosts' => [], 'host_tags' => [],
 				'tag_logic' => 'and'],
@@ -65,9 +65,35 @@ final class Definition {
 		$period = is_array($in['period'] ?? null) ? $in['period'] : [];
 		$type = (string) ($period['type'] ?? 'previous_month');
 		$def['period'] = [
-			'type' => array_key_exists($type, Period::TYPES) ? $type : 'previous_month',
-			'n' => max(1, min(400, (int) ($period['n'] ?? 30)))
+			'type' => array_key_exists($type, Period::allTypes()) ? $type : 'previous_month',
+			'n' => max(1, min(400, (int) ($period['n'] ?? 30))),
+			'date' => '',
+			'from' => '',
+			'till' => ''
 		];
+
+		// Fixed periods keep only the fields they use, in one canonical form, so the
+		// cache key and the stored file do not change with how the browser wrote them.
+		if ($def['period']['type'] === 'day') {
+			$def['period']['date'] = mb_substr(trim((string) ($period['date'] ?? '')), 0, 10);
+		}
+		elseif ($def['period']['type'] === 'range') {
+			$def['period']['from'] = Period::canonicalMoment(mb_substr((string) ($period['from'] ?? ''), 0, 19));
+			$def['period']['till'] = Period::canonicalMoment(mb_substr((string) ($period['till'] ?? ''), 0, 19));
+		}
+
+		if (Period::isFixed($def['period']['type'])) {
+			try {
+				$fixed = Period::fromSpec($def['period'], $def['timezone']);
+
+				if ($fixed->days() > 400) {
+					$errors[] = 'The period is longer than 400 days.';
+				}
+			}
+			catch (\InvalidArgumentException $e) {
+				$errors[] = 'Period: '.$e->getMessage();
+			}
+		}
 
 		$def['compare'] = !empty($in['compare']);
 
@@ -170,6 +196,10 @@ final class Definition {
 				: max(1, min(28, (int) ($s['day'] ?? 1))),
 			'hour' => max(0, min(23, (int) ($s['hour'] ?? 6)))
 		];
+
+		if ($def['schedule']['enabled'] && Period::isFixed($def['period']['type'])) {
+			$errors[] = 'A report pinned to fixed dates cannot be scheduled: it would send the same window every time. Pick a relative period (previous week, yesterday...) or turn the schedule off.';
+		}
 
 		// Delivery.
 		$d = is_array($in['delivery'] ?? null) ? $in['delivery'] : [];

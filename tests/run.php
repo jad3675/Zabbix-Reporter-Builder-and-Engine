@@ -97,6 +97,58 @@ check('custom period inclusive', $p->seconds() === 31 * 86400);
 check('custom period rejects bad dates', throws(fn() => Period::custom('08/01/2026', '2026-08-31', 'UTC'),
 	\InvalidArgumentException::class));
 
+// Fixed periods: one picked day, and a range down to the minute.
+$p = Period::day('2026-11-11', $ny);
+check('single day label', $p->label === 'Wednesday 11 November 2026', $p->label);
+check('single day is midnight to midnight', Format::datetime($p->from, $ny, 'Y-m-d H:i:s') === '2026-11-11 00:00:00'
+	&& Format::datetime($p->till, $ny, 'Y-m-d H:i:s') === '2026-11-11 23:59:59');
+check('single day across DST is 23 hours', Period::day('2026-03-08', $ny)->seconds() === 23 * 3600);
+check('single day rejects a bad date', throws(fn() => Period::day('2026-02-30', $ny), \InvalidArgumentException::class)
+	&& throws(fn() => Period::day('', $ny), \InvalidArgumentException::class));
+
+$p = Period::range('2026-11-11T08:00', '2026-11-11 17:00', $ny);
+check('range with times ends before the end minute', $p->seconds() === 9 * 3600
+	&& Format::datetime($p->till, $ny, 'H:i:s') === '16:59:59');
+check('range within a day labels the times', $p->label === '11 Nov 2026, 08:00 to 17:00', $p->label);
+$p = Period::range('2026-11-09 22:00', '2026-11-12 06:30', $ny);
+check('range across days labels both ends', $p->label === '9 Nov 2026 22:00 to 12 Nov 2026 06:30', $p->label);
+check('range of whole dates matches custom', Period::range('2026-08-01', '2026-08-31', 'UTC')->key()
+	=== Period::custom('2026-08-01', '2026-08-31', 'UTC')->key());
+check('a date as the end means that whole day', Period::range('2026-08-01 12:00', '2026-08-01', 'UTC')->seconds() === 12 * 3600);
+check('range refuses an end before the start', throws(fn() => Period::range('2026-11-12 08:00', '2026-11-12 08:00', $ny),
+	\InvalidArgumentException::class));
+check('range refuses impossible times', throws(fn() => Period::range('2026-11-12 25:00', '2026-11-13', $ny),
+	\InvalidArgumentException::class));
+check('fromSpec reads a stored day', Period::fromSpec(['type' => 'day', 'date' => '2026-11-11'], $ny)->label
+	=== 'Wednesday 11 November 2026');
+check('describe a relative period', Period::describe(['type' => 'last_n_days', 'n' => 14]) === 'Last N days (14)');
+check('describe an unset fixed period', strpos(Period::describe(['type' => 'day', 'date' => '']), 'not set') !== false);
+
+// ---------------------------------------------------------------- Interfaces
+
+use Modules\Reporter\Lib\Data\Interfaces;
+
+check('interface key: SNMP with OID name', Interfaces::parseKey('net.if.in[ifHCInOctets.5]') === ['in', '5']);
+check('interface key: errors before in', Interfaces::parseKey('net.if.in.errors[ifInErrors.10101]') === ['in_errors', '10101']);
+check('interface key: 7.x bare index', Interfaces::parseKey('net.if.out.discards[17]') === ['out_discards', '17']);
+check('interface key: agent name', Interfaces::parseKey('net.if.in["eth0"]') === ['in', 'eth0']);
+check('interface key: agent errors mode', Interfaces::parseKey('net.if.out[eth0,errors]') === ['out_errors', 'eth0']);
+check('interface key: agent packets ignored', Interfaces::parseKey('net.if.in[eth0,packets]') === null);
+check('interface key: not an interface', Interfaces::parseKey('net.if.discovery') === null
+	&& Interfaces::parseKey('net.if.type[ifType.5]') === null);
+check('labels from the older name', Interfaces::labels('Interface Gi1/0/1(Uplink (po1)): Bits received', [])
+	=== ['Gi1/0/1', 'Uplink (po1)']);
+check('labels from the 7.x name', Interfaces::labels('Interface [Gi1/0/1(Uplink)]: Bits sent', []) === ['Gi1/0/1', 'Uplink']);
+check('labels with no alias', Interfaces::labels('Interface eth0(): Bits sent', []) === ['eth0', '']
+	&& Interfaces::labels('Interface eth0: Bits sent', []) === ['eth0', '']);
+check('tags beat the name, unresolved macros do not', Interfaces::labels('Interface Gi1/0/1(Old): Bits sent',
+	[['tag' => 'description', 'value' => 'New'], ['tag' => 'interface', 'value' => 'GigabitEthernet1/0/1']])
+	=== ['GigabitEthernet1/0/1', 'New']
+	&& Interfaces::labels('Interface Gi1/0/1({#IFALIAS}): Bits sent', [['tag' => 'description', 'value' => '{#IFALIAS}']])
+	=== ['Gi1/0/1', '']);
+check('API pattern floats inside the item name', Interfaces::apiPattern('Gi1/0/?') === '*Gi1/0/*'
+	&& Interfaces::apiPattern('uplink') === '*uplink*');
+
 // ---------------------------------------------------------------- Tags, stats, format
 
 $tags = TagFilter::parse("site\nsite=Burnet\nrole~core\n!decom\nenv!=lab\n\n");
@@ -202,6 +254,23 @@ check('options clamped and unknown dropped', $def['sections'][0]['options']['lim
 check('section validation reported', (bool) preg_grep('/Set item tags/', $errors));
 check('bad email reported', (bool) preg_grep('/not-an-email/', $errors));
 
+$base_def = ['id' => 'p', 'name' => 'p', 'scope' => ['groups' => ['a']], 'sections' => [['type' => 'summary']]];
+[$pdef, $errors] = Definition::normalize($base_def + ['period' => ['type' => 'range', 'from' => '2026-11-11T08:00',
+	'till' => '2026-11-11T17:00', 'date' => 'junk']], $registry);
+check('range stored in canonical form', $errors === [] && $pdef['period']['from'] === '2026-11-11 08:00'
+	&& $pdef['period']['till'] === '2026-11-11 17:00' && $pdef['period']['date'] === '', json_encode([$pdef['period'], $errors]));
+[, $errors] = Definition::normalize($base_def + ['period' => ['type' => 'day', 'date' => '11/11/2026']], $registry);
+check('bad day refused', (bool) preg_grep('/Pick the day/', $errors), implode('; ', $errors));
+[, $errors] = Definition::normalize($base_def + ['period' => ['type' => 'day', 'date' => '2026-11-11'],
+	'schedule' => ['enabled' => true]], $registry);
+check('fixed period cannot be scheduled', (bool) preg_grep('/cannot be scheduled/', $errors));
+[, $errors] = Definition::normalize($base_def + ['period' => ['type' => 'range', 'from' => '2024-01-01',
+	'till' => '2026-01-01']], $registry);
+check('overlong range refused', (bool) preg_grep('/400 days/', $errors));
+[, $errors] = Definition::normalize(array_replace($base_def, ['sections' => [['type' => 'network_interfaces',
+	'options' => ['alias' => '', 'name' => '']]]]), $registry);
+check('interfaces section wants a pattern', (bool) preg_grep('/description or interface name pattern/', $errors));
+
 // ---------------------------------------------------------------- Schedule
 
 $sdef = ['timezone' => 'UTC', 'period' => ['type' => 'previous_month', 'n' => 30],
@@ -211,6 +280,8 @@ check('monthly schedule due after slot', $due !== null && $due->label === 'Augus
 check('monthly schedule not due before slot', Schedule::due($sdef, null, new DateTimeImmutable('2026-09-01 05:00 UTC')) === null);
 check('monthly schedule not repeated', Schedule::due($sdef, $due->key(), new DateTimeImmutable('2026-09-12 09:00 UTC')) === null);
 check('missed slot picked up later', Schedule::due($sdef, 'old', new DateTimeImmutable('2026-09-03 02:00 UTC')) !== null);
+check('a fixed period is never due', Schedule::due(array_replace($sdef, ['period' => ['type' => 'day', 'date' => '2026-09-01']]),
+	null, new DateTimeImmutable('2026-09-01 07:00 UTC')) === null);
 
 // ---------------------------------------------------------------- Settings and secrets
 
@@ -304,6 +375,8 @@ $fake = new FakeApi($period->from, $period->till, 60);
 		['type' => 'response_times', 'options' => ['group_by' => 'tag', 'tag' => 'site']],
 		['type' => 'problem_log', 'options' => ['sort' => 'duration']],
 		['type' => 'threshold_breaches', 'options' => ['item_tags' => 'component=cpu', 'threshold' => 60]],
+		['type' => 'network_interfaces', 'title' => 'Uplinks', 'options' => ['alias' => 'uplink', 'exclude' => 'Vlan*',
+			'limit' => 30]],
 		['type' => 'monitoring_health'],
 		['type' => 'inventory', 'options' => ['field' => 'vendor', 'list_devices' => true]],
 		['type' => 'audit_log', 'options' => ['display_limit' => 20]],
@@ -319,7 +392,7 @@ $limits['page_limit'] = 7;
 
 $report = (new Runner($drop_registry))->run($def, $period, $fake, $limits);
 $statuses = array_column($report['sections'], 'status');
-check('every section ran', $statuses === array_fill(0, 18, 'ok'),
+check('every section ran', $statuses === array_fill(0, 19, 'ok'),
 	json_encode(array_map(fn($s) => [$s['type'], $s['status'], $s['message']], $report['sections'])));
 check('lab host excluded by scope', $report['scope']['hosts'] === 60);
 
@@ -541,6 +614,118 @@ foreach ($audit_deletes['sections'][0]['blocks'] as $b) {
 check('"deletions only" keeps the update that deleted a macro', count(array_unique(array_column($delete_rows, 'name'))) === 2,
 	json_encode(array_column($delete_rows, 'name')));
 
+// Interfaces: picked by description, the idle and excluded ones left out.
+$if_rows = [];
+$if_kpis = [];
+
+foreach ($sections['network_interfaces']['blocks'] as $b) {
+	if ($b['type'] === 'table') {
+		$if_rows = $b['rows'];
+	}
+	elseif ($b['type'] === 'kpis') {
+		$if_kpis = array_column($b['items'], 'value', 'label');
+	}
+}
+
+$if_names = array_unique(array_column($if_rows, 'interface'));
+sort($if_names);
+check('interfaces matched by description only', $if_names === ['Gi1/0/49', 'Gi1/0/50'], json_encode($if_names));
+check('every uplink counted, the table capped', ($if_kpis['Interfaces'] ?? 0) === 80 && count($if_rows) === 30,
+	json_encode($if_kpis).' rows '.count($if_rows));
+check('description read from the 7.x item name when the tag is an unresolved macro',
+	in_array('Uplink to core-01', array_column($if_rows, 'alias'), true)
+	&& !in_array('{#IFALIAS}', array_column($if_rows, 'alias'), true));
+check('utilization from speed', (bool) array_filter($if_rows, static fn($r) => $r['peak_util'] > 0 && $r['peak_util'] < 100));
+check('sorted by peak utilization', array_column($if_rows, 'peak_util') === (function ($v) { rsort($v); return $v; })(
+	array_column($if_rows, 'peak_util')));
+check('link-down hours found', ($if_kpis['Not up at some point'] ?? 0) > 0);
+check('errors estimated', (bool) array_filter(array_column($if_rows, 'errors')));
+check('idle interface counted in a note', (bool) preg_grep('/left out: no traffic/', $sections['network_interfaces']['notes']));
+
+$if_run = static function (array $options) use ($def, $period, $drop_registry, $limits): array {
+	$r = (new Runner($drop_registry))->run(
+		array_replace($def, ['compare' => false, 'sections' => [['type' => 'network_interfaces', 'title' => '',
+			'options' => (new Registry(__DIR__.'/../sections'))->get('network_interfaces')->normalizeOptions($options)]]]),
+		$period, new FakeApi($period->from, $period->till, 20), $limits
+	);
+
+	foreach ($r['sections'][0]['blocks'] as $b) {
+		if ($b['type'] === 'table') {
+			return $b['rows'];
+		}
+	}
+
+	return [];
+};
+
+$rows_and = $if_run(['alias' => 'uplink', 'name' => 'Gi1/0/50']);
+check('description and name together', array_unique(array_column($rows_and, 'interface')) === ['Gi1/0/50']);
+$rows_or = $if_run(['alias' => 'printer', 'name' => 'Gi1/0/50', 'logic' => 'or']);
+check('description or name', count(array_unique(array_column($rows_or, 'interface'))) === 2);
+$rows_idle = $if_run(['alias' => '', 'name' => 'Te1/1/*', 'hide_idle' => false]);
+check('idle ports shown when asked', $rows_idle !== [] && array_sum(array_column($rows_idle, 'in_max')) == 0);
+$rows_vlan = $if_run(['alias' => 'uplink', 'sort' => 'name']);
+check('no speed, no utilization', (bool) array_filter($rows_vlan, static fn($r) => $r['interface'] === 'Vlan10'
+	&& $r['peak_util'] === null));
+
+// Link state: status shown, filtered on, and measured to the half hour.
+check('status column on screen with the end state', in_array('Lower layer down', array_column($if_rows, 'status'), true)
+	|| ($if_kpis['Not up at the end'] ?? 0) > 0, json_encode(array_count_values(array_column($if_rows, 'status'))));
+check('not-up-at-end counted', ($if_kpis['Not up at the end'] ?? 0) > 0, json_encode($if_kpis));
+
+$if_section = static function (array $options) use ($def, $period, $drop_registry, $limits): array {
+	$r = (new Runner($drop_registry))->run(
+		array_replace($def, ['compare' => false, 'sections' => [['type' => 'network_interfaces', 'title' => '',
+			'options' => $options]]]),
+		$period, new FakeApi($period->from, $period->till, 20), $limits
+	);
+	$rows = [];
+
+	foreach ($r['sections'][0]['blocks'] as $b) {
+		if ($b['type'] === 'table') {
+			$rows = $b['rows'];
+		}
+	}
+
+	return [$rows, $r['sections'][0]['notes'], $r['sections'][0]];
+};
+
+[$rows] = $if_section(['alias' => 'uplink', 'exclude' => 'Te*', 'state' => 'not_up_end', 'sort' => 'uptime']);
+check('filter: not up at the end', $rows !== [] && array_unique(array_column($rows, 'status')) === ['Lower layer down']
+	&& array_unique(array_column($rows, 'interface')) === ['Gi1/0/50'], json_encode(array_map(
+		fn($r) => [$r['host'], $r['interface'], $r['status']], $rows)));
+check('ten hours down at the end', array_unique(array_column($rows, 'down_seconds')) === [36000.0],
+	json_encode(array_column($rows, 'down_seconds')));
+
+[$rows] = $if_section(['alias' => 'uplink', 'name' => 'Gi1/0/49', 'state' => 'not_up_any']);
+check('filter: not up at some point, a drop that came back', $rows !== []
+	&& array_unique(array_column($rows, 'status')) === ['Up'], json_encode(array_column($rows, 'status')));
+check('a drop starting mid-hour measures three and a half hours', array_unique(array_column($rows, 'down_seconds'))
+	=== [12600.0], json_encode(array_column($rows, 'down_seconds')));
+check('uptime from it', abs($rows[0]['uptime'] - (1 - 12600 / $period->seconds()) * 100) < 0.01,
+	(string) $rows[0]['uptime']);
+
+[$rows] = $if_section(['alias' => 'uplink', 'state' => 'not_up_end', 'sort' => 'uptime']);
+check('lowest uptime first: the spare that never came up leads', ($rows[0]['interface'] ?? '') === 'Te1/1/1'
+	&& $rows[0]['uptime'] == 0 && end($rows)['interface'] === 'Gi1/0/50');
+
+[$rows] = $if_section(['alias' => 'spare', 'state' => 'never_up']);
+check('filter: never up keeps the idle port it is about', $rows !== []
+	&& array_unique(array_column($rows, 'interface')) === ['Te1/1/1'] && array_unique(array_column($rows, 'uptime')) === [0.0]
+	&& array_unique(array_column($rows, 'status')) === ['Down'], json_encode($rows[0] ?? null));
+
+[$rows] = $if_section(['alias' => 'uplink', 'state' => 'up_all']);
+check('filter: up the whole period', $rows !== [] && max(array_column($rows, 'down_seconds')) == 0
+	&& !in_array('Te1/1/1', array_column($rows, 'interface'), true));
+
+[$rows, $notes] = $if_section(['alias' => '', 'name' => 'Te1/1/*']);
+check('a spare port down all period is idle, and the note says so', $rows === []
+	&& (bool) preg_grep('/not up at any time/', $notes), json_encode($notes));
+
+[, , $sec] = $if_section(['alias' => 'uplink', 'state' => 'not_up_end', 'show_status' => false]);
+check('picking a link state brings its columns even with them switched off',
+	in_array('status', array_column(array_values(array_filter($sec['blocks'], fn($b) => $b['type'] === 'table'))[0]['columns'], 'key'), true));
+
 check('threshold breaches counted hours', (bool) array_filter(array_column($sections['threshold_breaches']['blocks'][2]['rows'], 'hours')));
 check('only write-free methods called', !preg_grep('/\.(create|update|delete)$/', $fake->calls));
 
@@ -548,8 +733,75 @@ $counts = array_count_values($fake->calls);
 check('problems fetched once for all sections', ($counts['event.get'] ?? 0) < 60, json_encode($counts));
 
 $maint_rows = $sections['maintenance']['blocks'][0]['rows'];
+
+// Devices in maintenance now, and the ones nobody took out.
+$maint_blocks = $sections['maintenance']['blocks'];
+$maint_kpis = array_column(array_values(array_filter($maint_blocks, fn($b) => $b['type'] === 'kpis'))[0]['items'] ?? [],
+	'value', 'label');
+$in_rows = [];
+
+foreach ($maint_blocks as $b) {
+	if ($b['type'] === 'table' && $b['title'] === 'Devices in maintenance now') {
+		$in_rows = $b['rows'];
+	}
+}
+
+$stuck = array_values(array_filter($in_rows, fn($r) => $r['flag'] !== ''));
+check('devices in maintenance listed', ($maint_kpis['In maintenance now'] ?? 0) === 22 && count($in_rows) === 22,
+	json_encode($maint_kpis).' rows '.count($in_rows));
+check('stuck devices flagged and listed first', count($stuck) === 2
+	&& array_column(array_slice($in_rows, 0, 2), 'flag') === array_column($stuck, 'flag')
+	&& strpos($stuck[0]['flag'], 'Over 7 days') !== false && strpos($stuck[0]['flag'], 'Out in') !== false,
+	json_encode(array_map(fn($r) => [$r['host'], $r['flag']], $stuck)));
+check('stuck since 120 days', abs($stuck[0]['for'] - 120 * 86400) < 120 && $stuck[0]['window'] === 'Core swap - remove after cutover');
+check('due out at the end of the 1,000-day period, inside the window', abs($stuck[0]['ends'] - (time() + 880 * 86400)) < 120
+	&& strpos($stuck[0]['flag'], 'Out in 2 years') !== false, $stuck[0]['flag']);
+$by_host = array_column($stuck, null, 'host');
+check('who added each device, per device from the audit log',
+	($by_host[$ctx_name = 'core-sw-mason-002']['added_by'] ?? '') === 'jsmith'
+	&& ($by_host['core-sw-liberty-005']['added_by'] ?? '') === 'mlee',
+	json_encode(array_map(fn($r) => [$r['host'], $r['added_by']], $stuck)));
+check('a recurring window that just opened is not flagged', !array_filter($in_rows,
+	fn($r) => $r['window'] === 'Server patching' && $r['flag'] !== '')
+	&& ($maint_kpis['Without data collection'] ?? 0) === 20);
+
+$stale_only = (new Runner($drop_registry))->run(
+	array_replace($def, ['compare' => false, 'sections' => [['type' => 'maintenance', 'title' => '',
+		'options' => ['show' => 'devices', 'stale_only' => true, 'stale_days' => 30]]]]),
+	$period, new FakeApi($period->from, $period->till, 60), $limits
+)['sections'][0];
+$only = array_values(array_filter($stale_only['blocks'], fn($b) => $b['type'] === 'table'));
+check('a stuck-in-maintenance report: devices only, flagged only', count($only) === 1
+	&& count($only[0]['rows']) === 2 && $only[0]['title'] === 'Devices in maintenance now');
 check('maintenance outside period excluded', !in_array('Old window', array_column($maint_rows, 'name'), true));
 check('maintenance via host group counted', in_array('Server patching', array_column($maint_rows, 'name'), true));
+
+// A section whose filter matches too much fails alone; the shared budgets are untouched.
+$broad = (new Runner($drop_registry))->run(
+	array_replace($def, ['compare' => false, 'sections' => [
+		['type' => 'network_interfaces', 'title' => '', 'options' => ['alias' => '*']],
+		['type' => 'top_metrics', 'title' => '', 'options' => ['item_tags' => 'component=cpu']],
+		['type' => 'summary', 'title' => '', 'options' => []]
+	]]),
+	$period, new FakeApi($period->from, $period->till, 20), ['max_items' => 40] + $limits
+);
+check('an over-broad section fails alone', array_column($broad['sections'], 'status') === ['error', 'ok', 'ok']
+	&& $broad['stopped'] === null && strpos($broad['sections'][0]['message'], 'Narrow') !== false,
+	json_encode(array_map(fn($s) => [$s['status'], $s['message']], $broad['sections'])));
+
+// "Match both" may fetch many candidates; the item limit counts only the ports kept.
+$both = static function (int $max) use ($def, $period, $drop_registry, $limits): array {
+	return (new Runner($drop_registry))->run(
+		array_replace($def, ['compare' => false, 'sections' => [['type' => 'network_interfaces', 'title' => '',
+			'options' => ['alias' => 'uplink', 'name' => 'Gi1/0/49']]]]),
+		$period, new FakeApi($period->from, $period->till, 20), ['max_items' => $max] + $limits
+	)['sections'][0];
+};
+$fits = $both(120);
+$over = $both(100);
+check('candidates dropped by the other pattern do not count against the limit', $fits['status'] === 'ok'
+	&& $over['status'] === 'error' && strpos($over['message'], 'over the limit of 100') !== false,
+	json_encode([$fits['status'], $fits['message'], $over['status'], $over['message']]));
 
 $budget_report = (new Runner($drop_registry))->run($def, $period, $fake, ['max_api_calls' => 12] + $limits);
 check('budget stop is reported, rest skipped', $budget_report['stopped'] !== null

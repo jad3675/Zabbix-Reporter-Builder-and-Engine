@@ -7,7 +7,8 @@
  *
  *   reporter.php run-due [--dry-run]    scheduled reports and queued requests (the timer runs this)
  *   reporter.php run <id> [--period=previous_month|previous_week|previous_day|month_to_date|last_n_days]
- *                         [--n=30] [--from=YYYY-MM-DD --till=YYYY-MM-DD]
+ *                         [--n=30] [--day=YYYY-MM-DD]
+ *                         [--from="YYYY-MM-DD[ HH:MM]" --till="YYYY-MM-DD[ HH:MM]"]
  *                         [--format=pdf,xlsx,csv] [--out=DIR] [--mail] [--refresh]
  *   reporter.php check                  settings, API reachability, export support
  *   reporter.php test-api
@@ -309,12 +310,18 @@ try {
 		case 'run':
 			$def = $load((string) ($args[1] ?? ''));
 
-			if (isset($flags['from']) || isset($flags['till'])) {
-				$period = Period::custom((string) ($flags['from'] ?? ''), (string) ($flags['till'] ?? ''), $def['timezone']);
+			if (isset($flags['day'])) {
+				$period = Period::day((string) $flags['day'], $def['timezone']);
+			}
+			elseif (isset($flags['from']) || isset($flags['till'])) {
+				$period = Period::range((string) ($flags['from'] ?? ''), (string) ($flags['till'] ?? ''), $def['timezone']);
+			}
+			elseif (isset($flags['period'])) {
+				$period = Period::resolve((string) $flags['period'], (int) ($flags['n'] ?? $def['period']['n']),
+					$def['timezone']);
 			}
 			else {
-				$period = Period::resolve((string) ($flags['period'] ?? $def['period']['type']),
-					(int) ($flags['n'] ?? $def['period']['n']), $def['timezone']);
+				$period = Period::fromSpec($def['period'], $def['timezone']);
 			}
 
 			$formats = isset($flags['format'])
@@ -356,7 +363,7 @@ try {
 
 						case 'run_report':
 							$def = $load((string) ($req['params']['id'] ?? ''));
-							$period = Period::resolve($def['period']['type'], (int) $def['period']['n'], $def['timezone']);
+							$period = Period::fromSpec($def['period'], $def['timezone']);
 							$msg = $produce($def, $period, $def['delivery']['formats'], null, true, false);
 							break;
 

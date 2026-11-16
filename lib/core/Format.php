@@ -8,7 +8,7 @@ namespace Modules\Reporter\Lib\Core;
 final class Format {
 
 	private const BINARY_UNITS = ['B', 'Bps'];
-	private const NO_PREFIX_UNITS = ['%', 'ms', 'rpm', 'RPM', 'C', '°C', 'F', 'V', 'A', 'W', 'dB', 'dBm', 's', 'unixtime',
+	private const NO_PREFIX_UNITS = ['%', 'ms', 'rpm', 'RPM', 'C', '°C', 'F', 'V', 'A', 'W', 'dB', 'dBm', 's', 'h', 'unixtime',
 		'uptime'];
 
 	public static function int($value): string {

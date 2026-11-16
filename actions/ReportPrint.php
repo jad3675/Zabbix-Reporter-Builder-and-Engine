@@ -18,6 +18,7 @@ class ReportPrint extends BaseAction {
 			'id' => 'required|string',
 			'period' => 'string',
 			'n' => 'int32',
+			'day' => 'string',
 			'from' => 'string',
 			'till' => 'string'
 		]);
