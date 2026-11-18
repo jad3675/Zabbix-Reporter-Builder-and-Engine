@@ -774,6 +774,76 @@ $only = array_values(array_filter($stale_only['blocks'], fn($b) => $b['type'] ==
 check('a stuck-in-maintenance report: devices only, flagged only', count($only) === 1
 	&& count($only[0]['rows']) === 2 && $only[0]['title'] === 'Devices in maintenance now');
 check('maintenance outside period excluded', !in_array('Old window', array_column($maint_rows, 'name'), true));
+
+// Time in maintenance, and the problems it kept quiet, checked against the fake's raw events.
+$mtable = static function (array $blocks, string $title): array {
+	foreach ($blocks as $b) {
+		if ($b['type'] === 'table' && $b['title'] === $title) {
+			return $b['rows'];
+		}
+	}
+
+	return [];
+};
+$win_rows = array_column($mtable($maint_blocks, 'Windows in effect during the period'), null, 'name');
+check('windows table uses the schedule: five Sundays of four hours', ($win_rows['Server patching']['hours'] ?? 0) === 5 * 4 * 3600
+	&& ($win_rows['Core switch firmware']['hours'] ?? 0) === 7200 && isset($win_rows['DB failover']),
+	json_encode(array_map(fn($r) => $r['hours'], $win_rows)));
+
+$time_rows = array_column($mtable($maint_blocks, 'Time in maintenance during the period'), null, 'host');
+$srv = array_filter($time_rows, fn($r) => strpos($r['host'], 'srv-') === 0);
+check('servers lost twenty hours of data each', count($srv) === 20
+	&& array_unique(array_column($srv, 'nodata')) === [72000] && array_unique(array_column($srv, 'total')) === [72000]);
+check('a switch in maintenance all month, with data', ($time_rows['core-sw-mason-002']['total'] ?? 0) === $period->seconds()
+	&& $time_rows['core-sw-mason-002']['nodata'] === 0, json_encode($time_rows['core-sw-mason-002'] ?? null));
+check('no-data devices sort first', strpos(array_values($time_rows)[0]['host'], 'srv-') === 0);
+
+$names = array_column($fake->call('host.get', ['output' => ['hostid', 'name']]), 'name', 'hostid');
+$raw = static function (string $hostid, int $a, int $b, ?string $component = null) use ($fake): array {
+	return array_values(array_filter($fake->call('event.get', ['output' => 'extend', 'source' => 0, 'object' => 0,
+		'value' => 1, 'hostids' => [$hostid], 'time_from' => $a, 'time_till' => $b - 1]),
+		fn($e) => $component === null || FakeApi::componentOf($e['name']) === $component));
+};
+$expect = [
+	'10002' => count($raw('10002', $period->from, $period->till + 1)),
+	'10005' => count($raw('10005', $period->from, $period->till + 1)),
+	'10004' => count($raw('10004', $period->from + 3 * 86400 + 3600, $period->from + 3 * 86400 + 3600 + 7200)),
+	'10014' => count($raw('10014', $period->from, $period->till + 1, 'cpu'))
+];
+$hid_rows = array_column($mtable($maint_blocks, 'Problems during maintenance'), null, 'host');
+$got = [];
+
+foreach ($expect as $hostid => $n) {
+	$got[$hostid] = $hid_rows[$names[$hostid]]['problems'] ?? 0;
+}
+
+check('problems during maintenance match the raw events per device', $got === $expect && array_sum($expect) > 0,
+	json_encode(['got' => $got, 'expect' => $expect]));
+$all_10014 = count($raw('10014', $period->from, $period->till + 1));
+check('a tag-filtered window counts only matching problems', $all_10014 > $expect['10014'] && $expect['10014'] > 0
+	&& strpos($hid_rows[$names['10014']]['most'] ?? '', 'High CPU') === 0, $all_10014.' vs '.$expect['10014']);
+// Core swap runs to 2029, so only problems never resolved outlast it, even ones that
+// resolved after the end of August.
+$open_10002 = count(array_filter($raw('10002', $period->from, $period->till + 1), fn($e) => $e['r_eventid'] === '0'));
+check('outlasting a maintenance follows it past the end of the period',
+	($hid_rows[$names['10002']]['outlasted'] ?? -1) === $open_10002, json_encode($hid_rows[$names['10002']] ?? null));
+check('no-data maintenance hides nothing countable', !array_filter($hid_rows, fn($r) => strpos($r['host'], 'srv-') === 0));
+$mk = [];
+
+foreach ($maint_blocks as $b) {
+	if ($b['type'] === 'kpis') {
+		$mk += array_column($b['items'], 'value', 'label');
+	}
+}
+
+check('hidden total is the sum over devices', ($mk['Problems'] ?? -1) === array_sum($expect)
+	+ array_sum(array_map(fn($r) => in_array($r['host'], array_map(fn($h) => $names[$h], array_keys($expect)), true)
+		? 0 : $r['problems'], $hid_rows)), json_encode($mk));
+check('device-hours without data', ($mk['Device-hours without data'] ?? 0) === 400);
+
+[, $errors] = Definition::normalize(array_replace($base_def, ['sections' => [['type' => 'maintenance',
+	'options' => ['show_windows' => false, 'show_now' => false, 'show_time' => false, 'show_hidden' => false]]]]), $registry);
+check('maintenance needs at least one part', (bool) preg_grep('/at least one part/', $errors));
 check('maintenance via host group counted', in_array('Server patching', array_column($maint_rows, 'name'), true));
 
 // A section whose filter matches too much fails alone; the shared budgets are untouched.

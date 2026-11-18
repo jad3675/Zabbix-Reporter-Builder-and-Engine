@@ -22,7 +22,8 @@ final class TableExport {
 			foreach ($section['blocks'] as $block) {
 				if ($block['type'] === 'kpis') {
 					foreach ($block['items'] as $k) {
-						$kpis[] = [$section['title'], $k['label'], self::value($k['value'], $k['format'] ?? 'int', [], $tz)];
+						$label = ($block['title'] ?? '') !== '' ? $block['title'].': '.$k['label'] : $k['label'];
+						$kpis[] = [$section['title'], $label, self::value($k['value'], $k['format'] ?? 'int', [], $tz)];
 					}
 				}
 			}

@@ -174,7 +174,10 @@ final class HtmlRenderer {
 
 			switch ($block['type']) {
 				case 'kpis':
-					$chunk = $this->kpis($block['items']);
+					// A titled part keeps its heading and numbers together.
+					$chunk = ($block['title'] ?? '') !== ''
+						? '<div class="keep"><h3>'.self::e($block['title']).'</h3>'.$this->kpis($block['items']).'</div>'
+						: $this->kpis($block['items']);
 					break;
 
 				case 'table':
@@ -246,7 +249,9 @@ final class HtmlRenderer {
 			$limit = min($limit, $this->row_cap);
 		}
 
-		$html = $t['title'] !== '' && count($t['columns']) > 0 ? '<h3>'.self::e($t['title']).'</h3>' : '';
+		$html = $t['title'] !== '' && count($t['columns']) > 0 && empty($t['under_kpis'])
+			? '<h3>'.self::e($t['title']).'</h3>'
+			: '';
 
 		if ($total === 0) {
 			return $html.'<p class="empty">'.self::e($t['empty']).'</p>';

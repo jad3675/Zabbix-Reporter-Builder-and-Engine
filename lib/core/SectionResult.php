@@ -23,8 +23,12 @@ final class SectionResult {
 	private array $blocks = [];
 	private array $notes = [];
 
-	public function kpis(array $items): self {
-		$this->blocks[] = ['type' => 'kpis', 'items' => array_values($items)];
+	/**
+	 * Headline numbers. A section in several parts gives each part's numbers its title,
+	 * and the table that follows sets 'under_kpis' => true so the title is not repeated.
+	 */
+	public function kpis(array $items, string $title = ''): self {
+		$this->blocks[] = ['type' => 'kpis', 'items' => array_values($items), 'title' => $title];
 
 		return $this;
 	}
@@ -37,7 +41,8 @@ final class SectionResult {
 			'rows' => array_values($rows),
 			'display_limit' => max(0, (int) ($options['display_limit'] ?? 0)),
 			'sheet' => (string) ($options['sheet'] ?? $title),
-			'empty' => (string) ($options['empty'] ?? 'Nothing to report for this period.')
+			'empty' => (string) ($options['empty'] ?? 'Nothing to report for this period.'),
+			'under_kpis' => !empty($options['under_kpis'])
 		];
 
 		return $this;

@@ -215,11 +215,13 @@ final class FakeApi implements ApiClient {
 			['maintenanceid' => '1', 'name' => 'Core switch firmware', 'maintenance_type' => 0,
 				'active_since' => $from + 3 * 86400, 'active_till' => $from + 4 * 86400,
 				'hosts' => [['hostid' => '10002'], ['hostid' => '10004']], 'hostgroups' => [],
-				'timeperiods' => [['timeperiod_type' => 0, 'period' => 7200]]],
+				'timeperiods' => [['timeperiod_type' => 0, 'period' => 7200, 'start_date' => $from + 3 * 86400 + 3600]]],
 			['maintenanceid' => '2', 'name' => 'Server patching', 'maintenance_type' => 1,
 				'active_since' => $from - 90 * 86400, 'active_till' => $till + 90 * 86400,
 				'hosts' => [], 'hostgroups' => [['groupid' => '11']],
-				'timeperiods' => [['timeperiod_type' => 3, 'period' => 14400]]],
+				// Every Sunday 02:00 for four hours, collection off.
+				'timeperiods' => [['timeperiod_type' => 3, 'every' => 1, 'dayofweek' => 64, 'start_time' => 7200,
+					'period' => 14400]]],
 			['maintenanceid' => '3', 'name' => 'Old window', 'maintenance_type' => 0,
 				'active_since' => $from - 90 * 86400, 'active_till' => $from - 80 * 86400,
 				'hosts' => [['hostid' => '10002']], 'hostgroups' => [], 'timeperiods' => []],
@@ -228,7 +230,14 @@ final class FakeApi implements ApiClient {
 			['maintenanceid' => '4', 'name' => 'Core swap - remove after cutover', 'maintenance_type' => 0,
 				'active_since' => time() - 130 * 86400, 'active_till' => time() + 3 * 365 * 86400,
 				'hosts' => [['hostid' => '10002'], ['hostid' => '10005']], 'hostgroups' => [],
-				'timeperiods' => [['timeperiod_type' => 0, 'period' => 1000 * 86400, 'start_date' => time() - 120 * 86400]]]
+				'timeperiods' => [['timeperiod_type' => 0, 'period' => 1000 * 86400, 'start_date' => time() - 120 * 86400]]],
+			// Only CPU problems are covered: link-down and ping problems on the same host
+			// in the same month still alert.
+			['maintenanceid' => '5', 'name' => 'DB failover', 'maintenance_type' => 0, 'tags_evaltype' => 0,
+				'tags' => [['tag' => 'component', 'operator' => 0, 'value' => 'cpu']],
+				'active_since' => $from, 'active_till' => $till + 1,
+				'hosts' => [['hostid' => '10014']], 'hostgroups' => [],
+				'timeperiods' => [['timeperiod_type' => 0, 'period' => $till + 1 - $from, 'start_date' => $from]]]
 		];
 
 		// What the hosts say about it now: the servers inside this week's patching
@@ -390,6 +399,10 @@ final class FakeApi implements ApiClient {
 
 				$row = ['eventid' => $e['eventid'], 'clock' => $e['clock']];
 
+				if (isset($p['selectTags'])) {
+					$row['tags'] = [['tag' => 'component', 'value' => self::componentOf((string) $e['name'])]];
+				}
+
 				if (isset($p['selectAcknowledges'])) {
 					// Most problems get acknowledged; some never do.
 					$row['acknowledges'] = ((int) $e['eventid']) % 5 === 0
@@ -406,6 +419,10 @@ final class FakeApi implements ApiClient {
 		$rows = array_filter($this->events, static fn($e) => $e['value'] === ($p['value'] ?? 1));
 
 		return $this->page($this->filterByHostTime(array_values($rows), $p), $p, 'eventid');
+	}
+
+	public static function componentOf(string $name): string {
+		return stripos($name, 'CPU') !== false ? 'cpu' : (stripos($name, 'link') !== false ? 'network' : 'availability');
 	}
 
 	private function filterByHostTime(array $rows, array $p): array {

@@ -160,7 +160,7 @@ doubles the queries, so it is off by default.
 | Monitoring health | items not collecting and interfaces unreachable, by device |
 | Inventory summary | devices under management grouped by an inventory field: vendor, model, OS, location |
 | Configuration changes | who changed what, from the Zabbix audit log, with each changed field on its own line |
-| Maintenance windows | windows active during the period, and the devices in maintenance now: since when, due out when, who added them, and a flag on the ones nobody took out |
+| Maintenance windows | windows in effect during the period; devices in maintenance now, with who added them and a flag on the ones nobody took out; time each device spent in maintenance with and without data; problems that started during maintenance |
 
 **Network interfaces** rebuilds ports from the items interface discovery creates
 (`net.if.in`, `net.if.out`, `.errors`, `.discards`, `net.if.status`, `net.if.speed`),
@@ -199,17 +199,38 @@ The Zabbix API cannot see ifDescr: discovery reads it, then it is gone. The name
 matches ifName, and also an `ifdescr` tag where one exists. To filter on ifDescr, add that
 tag (value `{#IFDESCR}`) to the item prototypes in your interface templates.
 
-**Maintenance windows** lists the windows active during the period and, separately, the
-devices in maintenance at the moment the report runs. Zabbix records on each host when
-its current maintenance period began, so the table shows how long each device has been
-in, when that period is due to end (the period's length, capped by the window's own
-end), and who added it, from the audit log. A device is flagged when it has been in
+**Maintenance windows** has four parts, each switched on or off.
+
+*Windows in effect during the period* lists each window that actually ran, with how long
+it was in effect. Zabbix keeps the schedule, not a history, so this is worked out from
+it the way the server does: one-time periods, and daily, weekly and monthly ones
+repeating from the window's "active since", at their local time of day, cut to the
+window's active since and till. The server reads those times in its own time zone; the
+report uses its own, and a note says which. If the two differ, recurring windows shift.
+
+*Devices in maintenance now* is a snapshot taken when the report runs. Zabbix records
+on each host when its current maintenance period began, so the table shows how long each
+device has been in, when that period is due to end (its length, capped by the window's
+own end), and who added it, from the audit log. A device is flagged when it has been in
 longer than a set number of days (7 by default) or is not due out for more than a year.
 A recurring window resets the clock each time it opens, so a nightly window is not
-flagged; a one-time period someone set to 999 days is. "List only flagged devices" with
-"Devices in maintenance now only" makes a report of devices nobody took out. Who added a
-device needs Super admin to read the audit log; a device added through a host group has
-no entry of its own, and the audit log forgets what housekeeping removes.
+flagged; a one-time period someone set to 999 days is. With only this part switched on
+and "List only flagged devices" ticked, the section is a report of devices nobody took
+out. Who added a device needs Super admin to read the audit log; a device added through a
+host group has no entry of its own, and the audit log forgets what housekeeping removes.
+
+*Time each device spent in maintenance* splits it into with and without data
+collection. Hours without data hold no values: graphs have gaps, availability leaves
+them out, and no problem can be raised. This is the usual answer to "why is this
+device's availability so low" or "why is it so quiet".
+
+*Problems during maintenance* counts, per device, the problems that started while it
+was in a maintenance with data collection, so their notifications were held back. A
+window with tag conditions only covers problems whose tags match (the problems' tags are
+read only for those). "Still open when it ended" counts problems that outlasted the
+maintenance and alerted from then on, following a window that runs past the end of the
+report to its real end. Maintenance without data collection raises no problems at all,
+so it hides more than can be counted.
 
 **Configuration changes** reads the Zabbix audit log. It flattens the details field, so a
 macro deleted inside a host update appears as its own line instead of hiding behind an
