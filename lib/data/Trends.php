@@ -136,9 +136,9 @@ final class Trends {
 	 * other value, as a link going down or coming back does.
 	 *
 	 * @return array<string, array{hours: int, up_seconds: float, touched: int, last: float,
-	 *     last_min: float, last_max: float, last_clock: int, up_hours: int}>
+	 *     last_min: float, last_max: float, last_clock: int, up_hours: int, last_up_end: ?int}>
 	 */
-	public static function linkState(Context $ctx, array $itemids): array {
+	public static function linkState(Context $ctx, array $itemids, ?int $from = null, ?int $till = null): array {
 		$acc = [];
 
 		self::each($ctx, $itemids, static function (array $t) use (&$acc): void {
@@ -148,7 +148,7 @@ final class Trends {
 			$max = (float) $t['value_max'];
 			$clock = (int) $t['clock'];
 			$acc[$id] ??= ['hours' => 0, 'up_seconds' => 0.0, 'touched' => 0, 'up_hours' => 0, 'last' => 0.0,
-				'last_min' => 0.0, 'last_max' => 0.0, 'last_clock' => -1];
+				'last_min' => 0.0, 'last_max' => 0.0, 'last_clock' => -1, 'last_up_end' => null];
 			$a = &$acc[$id];
 			$a['hours']++;
 
@@ -166,19 +166,28 @@ final class Trends {
 			$a['touched'] += $up < 1.0 ? 1 : 0;
 			$a['up_hours'] += $up > 0.0 ? 1 : 0;
 
+			// When the link was last seen up. In an hour that held both, assume it was up
+			// first: that is the hour a link went down in.
+			if ($up > 0.0) {
+				$a['last_up_end'] = max($a['last_up_end'] ?? 0, $clock + (int) round($up * 3600));
+			}
+
 			if ($clock >= $a['last_clock']) {
 				$a['last'] = $avg;
 				$a['last_min'] = $min;
 				$a['last_max'] = $max;
 				$a['last_clock'] = $clock;
 			}
-		});
+		}, $from, $till);
 
 		return $acc;
 	}
 
-	private static function each(Context $ctx, array $itemids, callable $fn): void {
-		$hours = max(1, (int) ceil($ctx->period->seconds() / 3600));
+	/** Every trend row of the items in the period, or in [$from, $till] when given. */
+	private static function each(Context $ctx, array $itemids, callable $fn, ?int $from = null, ?int $till = null): void {
+		$from ??= $ctx->period->from;
+		$till ??= $ctx->period->till;
+		$hours = max(1, (int) ceil(($till - $from + 1) / 3600));
 		$per_call = max(1, min($ctx->limit('chunk_trend_items', 50),
 			intdiv($ctx->limit('trend_rows_per_call', 50000), $hours)));
 
@@ -186,8 +195,8 @@ final class Trends {
 			$rows = $ctx->api->call('trend.get', [
 				'output' => ['itemid', 'clock', 'num', 'value_min', 'value_avg', 'value_max'],
 				'itemids' => $chunk,
-				'time_from' => $ctx->period->from,
-				'time_till' => $ctx->period->till
+				'time_from' => $from,
+				'time_till' => $till
 			]);
 
 			foreach ($rows as $row) {

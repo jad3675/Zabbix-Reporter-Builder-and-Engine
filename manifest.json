@@ -2,7 +2,7 @@
     "manifest_version": 2.0,
     "id": "reporter",
     "name": "Report builder",
-    "version": "1.8.3",
+    "version": "1.8.4",
     "namespace": "Reporter",
     "author": "John Danhires",
     "description": "Customer-facing reports built from sections: written summary, problems and notifications per device, response times, problem log, top metrics, time above threshold, capacity growth, network interfaces, availability, monitoring health, inventory, configuration changes and maintenance. PDF, XLSX and CSV. Read-only, budgeted, and scheduled from a CLI runner.",

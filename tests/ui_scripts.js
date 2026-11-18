@@ -105,7 +105,7 @@ const page = (file) => {
 		&& byLabel('Interface name matches') && byLabel('When both are set'));
 	setVal(byLabel('Interface name matches'), 'Te1/1/*');
 	ok('link state filter offered', byLabel('Link state') && [...byLabel('Link state').options].map((o) => o.value).join()
-		=== 'all,not_up_any,not_up_end,never_up,up_all');
+		=== 'all,down_now,not_up_any,not_up_end,never_up,up_all');
 	setVal(byLabel('Link state'), 'not_up_end', 'change');
 
 	const before = posted.length;

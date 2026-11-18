@@ -726,6 +726,78 @@ check('a spare port down all period is idle, and the note says so', $rows === []
 check('picking a link state brings its columns even with them switched off',
 	in_array('status', array_column(array_values(array_filter($sec['blocks'], fn($b) => $b['type'] === 'table'))[0]['columns'], 'key'), true));
 
+// Down right now: the morning down report, on status-only fabric ports.
+$fab_fake = new FakeApi($period->from, $period->till, 20);
+$fab_hosts = array_values(array_filter($fab_fake->call('host.get', ['output' => ['hostid', 'name']]),
+	fn($h) => (int) $h['hostid'] % 10 === 0 && strpos($h['name'], 'core-sw') === 0));
+$expect_down = array_values(array_map(fn($h) => $h['name'],
+	array_filter($fab_hosts, fn($h) => (int) $h['hostid'] % 20 === 0)));
+sort($expect_down);
+$hours_in = (int) ceil(($period->till - $period->from) / 3600);
+
+[$rows, $notes, $sec] = $if_section(['alias' => '*Fabric Physical Link*', 'state' => 'down_now', 'sort' => 'name']);
+$down_hosts = array_column($rows, 'host');
+check('down now: exactly the fabric links that are down at the end', $down_hosts === $expect_down && $expect_down !== []
+	&& array_unique(array_column($rows, 'interface')) === ['eth1/49'] && array_unique(array_column($rows, 'status')) === ['Down'],
+	json_encode(['got' => $down_hosts, 'want' => $expect_down]));
+check('down now: ports with only a status item are reported', count($fab_hosts) > 0
+	&& array_column(array_values(array_filter($sec['blocks'], fn($b) => $b['type'] === 'kpis'))[0]['items'], 'value', 'label')
+		['Interfaces checked'] === 2 * count($fab_hosts));
+check('down now: down since the end of the last hour it was up', array_unique(array_column($rows, 'since'))
+	=== [$period->from + ($hours_in - 30) * 3600], json_encode(array_column($rows, 'since_text')));
+check('down now: a link that came back is not listed', !in_array('eth1/50', array_column($rows, 'interface'), true));
+check('down now: the table is the down list', ($sec['blocks'][1]['title'] ?? '') === 'Interfaces not up now'
+	&& !in_array('in_max', array_column($sec['blocks'][1]['columns'], 'key'), true));
+[$rows, , $sec] = $if_section(['alias' => 'spine-2', 'state' => 'down_now']);
+check('down now: none down says all up', $rows === []
+	&& preg_match('/^All \d+ matching interfaces with a status item are up\.$/', $sec['blocks'][1]['empty']));
+
+[$rows] = $if_section(['alias' => 'Fabric Physical Link', 'state' => 'not_up_any', 'sort' => 'name']);
+$e50 = array_values(array_filter($rows, fn($r) => $r['interface'] === 'eth1/50'));
+check('status-only ports show blank traffic, not zero', count($e50) === count($fab_hosts) && $e50[0]['in_max'] === null
+	&& $e50[0]['peak_util'] === null && $e50[0]['down_seconds'] == 5.5 * 3600, json_encode($e50[0] ?? null));
+
+// When nothing matches, the section says why.
+[, $notes] = $if_section(['alias' => 'Fabric health']);
+check('explain: matching items on non-interface keys', (bool) preg_grep('/none uses an interface key.*cisco\.aci\.fabric\.health\[\.\.\.\]/', $notes),
+	json_encode($notes));
+[, $notes] = $if_section(['alias' => 'eth1/49']);
+check('explain: the text is in the interface name', (bool) preg_grep('/put the pattern in "Interface name matches"/', $notes),
+	json_encode($notes));
+[, $notes] = $if_section(['alias' => '*no-such-thing-zz*']);
+check('explain: nothing by that name at all', (bool) preg_grep('/^No item on the devices in scope has a name containing/', $notes));
+[, $notes] = $if_section(['alias' => 'Fabric Physical', 'exclude' => '*spine*']);
+check('explain: everything excluded', (bool) preg_grep('/left out by "Skip interfaces"/', $notes), json_encode($notes));
+
+// The report as sent, and as it should be set up. Neither is refused on save.
+$johns = json_decode(<<<'JSON'
+{"id":"network-interface-down","name":"Network Interface Down","description":"","timezone":"America/Detroit",
+ "period":{"type":"last_n_days","n":1,"date":"","from":"","till":""},"compare":false,
+ "scope":{"groups":["Network/ACI","Network/Cisco"],"hosts":[],"group_patterns":"","host_tags":"","tag_logic":"and"},
+ "branding":{"title":"Daily Network Interface Report","customer":"","accent":"#1f5f8b","logo":"","paper":"Letter","footer":""},
+ "sections":[{"type":"network_interfaces","title":"","options":{"alias":"*Fabric Physical Link*","name":"","logic":"and",
+  "exclude":"","state":"not_up_any","sort":"name","limit":50,"util_threshold":80,"hide_idle":true,"show_errors":false,
+  "show_status":false,"sparkline":false,"chart":false,"intro":"","exclude_hosts":""}}],
+ "schedule":{"enabled":false,"cycle":"daily","day":1,"hour":6},
+ "delivery":{"formats":["pdf","xlsx"],"email_to":"","email_subject":"","email_body":""}}
+JSON, true);
+[, $errors] = Definition::normalize($johns, $registry);
+check('the report as sent validates', $errors === [], implode('; ', $errors));
+$johns['period']['type'] = 'last_24_hours';
+$johns['sections'][0]['options']['state'] = 'down_now';
+$johns['schedule']['enabled'] = true;
+[$jdef, $errors] = Definition::normalize($johns, $registry);
+check('the 6am down report validates and schedules', $errors === [] && $jdef['period']['type'] === 'last_24_hours'
+	&& $jdef['sections'][0]['options']['state'] === 'down_now', implode('; ', $errors));
+
+// Last 24 hours: to the minute it runs, 24 real hours across a clock change.
+$p = Period::resolve('last_24_hours', 1, 'America/Detroit', new DateTimeImmutable('2026-11-19 06:00:37', new DateTimeZone('America/Detroit')));
+check('last 24 hours ends at the minute it runs', $p->label === '18 Nov 2026 06:00 to 19 Nov 2026 06:00' && $p->seconds() === 86400,
+	$p->label);
+$p = Period::resolve('last_24_hours', 1, $ny, new DateTimeImmutable('2026-11-01 06:00', new DateTimeZone($ny)));
+check('last 24 hours across the clock change', $p->seconds() === 86400 && $p->label === '31 Oct 2026 07:00 to 1 Nov 2026 06:00',
+	$p->label);
+
 check('threshold breaches counted hours', (bool) array_filter(array_column($sections['threshold_breaches']['blocks'][2]['rows'], 'hours')));
 check('only write-free methods called', !preg_grep('/\.(create|update|delete)$/', $fake->calls));
 

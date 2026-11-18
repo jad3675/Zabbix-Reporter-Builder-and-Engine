@@ -56,6 +56,33 @@ final class Interfaces {
 		// With "and", every port kept matches the description patterns, so those alone
 		// narrow the search. With "or", either list can bring a port in.
 		$search = ($logic === 'and' && $alias && $name) ? $alias : array_merge($alias, $name);
+		$ports = self::candidates($ctx, $search);
+		$out = [];
+		$kept = 0;
+
+		foreach ($ports as $id => $port) {
+			if (self::verdict($port, $alias, $name, $logic, $exclude) !== 'ok') {
+				continue;
+			}
+
+			$out[$id] = $port;
+			$kept += count($port['items']);
+		}
+
+		$max = $ctx->limit('max_items', 20000);
+
+		if ($kept > $max) {
+			throw new SelectorTooBroad(sprintf(
+				'%d interfaces match, %d items in all, over the limit of %d. Narrow the description or name patterns, or the devices.',
+				count($out), $kept, $max
+			));
+		}
+
+		return $out;
+	}
+
+	/** Ports built from the interface items whose names match any of the patterns. */
+	private static function candidates(Context $ctx, array $search): array {
 		$ports = [];
 
 		// Rows are folded into ports as they arrive and then dropped, so the candidates
@@ -95,41 +122,165 @@ final class Interfaces {
 			}
 		});
 
-		$out = [];
-		$kept = 0;
+		return $ports;
+	}
 
-		foreach ($ports as $id => $port) {
-			$names = array_values(array_filter([$port['name'], $port['descr']], 'strlen'));
-			$hit_alias = $alias && Filters::matches($port['alias'], $alias);
-			$hit_name = $name && (bool) array_filter($names, static fn($n) => Filters::matches($n, $name));
+	/**
+	 * Why a port is or is not reported: 'ok', 'no_match' (its description and name do
+	 * not match), 'excluded', or 'no_items' (matched, but has neither traffic nor status).
+	 */
+	private static function verdict(array $port, array $alias, array $name, string $logic, array $exclude): string {
+		$names = array_values(array_filter([$port['name'], $port['descr']], 'strlen'));
+		$hit_alias = $alias && Filters::matches($port['alias'], $alias);
+		$hit_name = $name && (bool) array_filter($names, static fn($n) => Filters::matches($n, $name));
 
-			if ($alias && $name) {
-				$keep = $logic === 'and' ? ($hit_alias && $hit_name) : ($hit_alias || $hit_name);
-			}
-			else {
-				$keep = $alias ? $hit_alias : $hit_name;
-			}
-
-			if (!$keep || !isset($port['items']['in']) && !isset($port['items']['out'])) {
-				continue;
-			}
-
-			if ($exclude && (Filters::matches($port['alias'], $exclude)
-					|| array_filter($names, static fn($n) => Filters::matches($n, $exclude)))) {
-				continue;
-			}
-
-			$out[$id] = $port;
-			$kept += count($port['items']);
+		if ($alias && $name) {
+			$keep = $logic === 'and' ? ($hit_alias && $hit_name) : ($hit_alias || $hit_name);
+		}
+		else {
+			$keep = $alias ? $hit_alias : $hit_name;
 		}
 
-		$max = $ctx->limit('max_items', 20000);
+		if (!$keep) {
+			return 'no_match';
+		}
 
-		if ($kept > $max) {
-			throw new SelectorTooBroad(sprintf(
-				'%d interfaces match, %d items in all, over the limit of %d. Narrow the description or name patterns, or the devices.',
-				count($out), $kept, $max
-			));
+		if ($exclude && (Filters::matches($port['alias'], $exclude)
+				|| array_filter($names, static fn($n) => Filters::matches($n, $exclude)))) {
+			return 'excluded';
+		}
+
+		// A port with only a status item is still a port: fabric links and other ports
+		// whose templates keep no traffic counters.
+		if (!isset($port['items']['in']) && !isset($port['items']['out']) && !isset($port['items']['status'])) {
+			return 'no_items';
+		}
+
+		return 'ok';
+	}
+
+	/**
+	 * When nothing matches, say why, in terms of what is actually on the devices: no
+	 * item names contain the pattern at all; they do, but on keys that are not interface
+	 * keys; interfaces were found, but the text is in their name, not their description;
+	 * or everything matching was excluded.
+	 *
+	 * @return string[]
+	 */
+	public static function explain(Context $ctx, array $filter): array {
+		$alias = Filters::patterns((string) ($filter['alias'] ?? ''));
+		$name = Filters::patterns((string) ($filter['name'] ?? ''));
+		$exclude = Filters::patterns((string) ($filter['exclude'] ?? ''));
+		$logic = ($filter['logic'] ?? 'and') === 'or' ? 'or' : 'and';
+		$search = array_merge($alias, $name);
+		$shown = implode(', ', array_map(static fn($p) => '"'.$p.'"', $search));
+		$ports = self::candidates($ctx, $search);
+
+		if (!$ports) {
+			$probe = [];
+
+			foreach ($ctx->chunks($ctx->hostids(), $ctx->limit('chunk_hosts', 500)) as $hostids) {
+				foreach (array_unique(array_map([self::class, 'apiPattern'], $search)) as $pattern) {
+					foreach ($ctx->api->call('item.get', [
+						'output' => ['itemid', 'name', 'key_'],
+						'hostids' => $hostids,
+						'search' => ['name' => $pattern],
+						'searchWildcardsEnabled' => true,
+						'limit' => 200
+					]) as $item) {
+						$probe[(string) $item['itemid']] = $item;
+					}
+				}
+
+				if (count($probe) >= 200) {
+					break;
+				}
+			}
+
+			if (!$probe) {
+				return [sprintf('No item on the devices in scope has a name containing %s. The patterns are matched against what Zabbix shows in item names (for example "Interface Gi1/0/1(Uplink): Bits received"); text that is only in the device\'s own config is not visible. Check the spelling, and that the devices are in the groups this report covers.', $shown)];
+			}
+
+			$keys = [];
+
+			foreach ($probe as $item) {
+				$keys[preg_replace('/\[.*$/s', '[...]', (string) $item['key_'])] = true;
+			}
+
+			$sample = array_slice(array_values($probe), 0, 3);
+
+			return [sprintf('%s%d item(s) have names containing %s, but none uses an interface key (net.if.in, net.if.out, net.if.status...), so this section cannot treat them as ports. Their keys look like %s. For example: %s. A section that reads these keys needs to know what "up" looks like in them; send the key and a sample value and it can be added.',
+				count($probe) >= 200 ? 'At least ' : '', count($probe), $shown,
+				implode(', ', array_slice(array_keys($keys), 0, 5)),
+				implode('; ', array_map(static fn($i) => '"'.$i['name'].'" ('.$i['key_'].')', $sample)))];
+		}
+
+		$verdicts = [];
+
+		foreach ($ports as $port) {
+			$verdicts[self::verdict($port, $alias, $name, $logic, $exclude)][] = $port;
+		}
+
+		$lines = [];
+		$miss = $verdicts['no_match'] ?? [];
+
+		if ($miss) {
+			$sample = array_slice($miss, 0, 4);
+			$read = implode('; ', array_map(static fn($p) => sprintf('name "%s", description "%s"', $p['name'], $p['alias']),
+				$sample));
+			$hint = '';
+
+			// The pattern found the items, so it is somewhere in the item name. If it is in
+			// the part read as the interface name, say so.
+			if ($alias && !$name && array_filter($miss, static fn($p) => Filters::matches($p['name'], $alias))) {
+				$hint = ' The text is in the interface name, not its description: put the pattern in "Interface name matches" instead.';
+			}
+			elseif ($name && !$alias && array_filter($miss, static fn($p) => Filters::matches($p['alias'], $name))) {
+				$hint = ' The text is in the description, not the interface name: put the pattern in "Description (ifAlias) matches" instead.';
+			}
+			elseif ($alias && $name && $logic === 'and') {
+				$hint = ' Both patterns must match one interface; "Either one is enough" may be what is wanted.';
+			}
+			else {
+				$hint = ' The pattern appears elsewhere in the item name, not in the part read as the interface name or description.';
+			}
+
+			$lines[] = sprintf('%d interface(s) have item names containing %s, but none matched as configured. They read as: %s.%s',
+				count($miss), $shown, $read, $hint);
+		}
+
+		if ($verdicts['excluded'] ?? []) {
+			$lines[] = sprintf('%d matching interface(s) were left out by "Skip interfaces".', count($verdicts['excluded']));
+		}
+
+		if ($verdicts['no_items'] ?? []) {
+			$lines[] = sprintf('%d matching interface(s) have no traffic or operational status items to report on.',
+				count($verdicts['no_items']));
+		}
+
+		return $lines ?: ['Interfaces match, but none on the devices in scope.'];
+	}
+
+	/**
+	 * Latest value of each item, as Zabbix holds it now: no history or trend read.
+	 *
+	 * @return array<string, array{value: ?float, clock: int, supported: bool}>
+	 */
+	public static function latest(Context $ctx, array $itemids): array {
+		$out = [];
+
+		foreach ($ctx->chunks(array_values(array_unique($itemids)), $ctx->limit('chunk_ids', 1000)) as $ids) {
+			foreach ($ctx->api->call('item.get', [
+				'output' => ['itemid', 'lastvalue', 'lastclock', 'state'],
+				'itemids' => $ids
+			]) as $item) {
+				$clock = (int) ($item['lastclock'] ?? 0);
+				$out[(string) $item['itemid']] = [
+					'value' => $clock > 0 && is_numeric($item['lastvalue'] ?? null) ? (float) $item['lastvalue'] : null,
+					'clock' => $clock,
+					'supported' => (int) ($item['state'] ?? 0) === 0
+				];
+			}
 		}
 
 		return $out;

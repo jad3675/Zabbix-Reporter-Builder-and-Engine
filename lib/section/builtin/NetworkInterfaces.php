@@ -22,6 +22,7 @@ final class NetworkInterfaces extends AbstractSection {
 
 	private const STATES = [
 		'all' => 'Any link state',
+		'down_now' => 'Not up right now (latest value)',
 		'not_up_any' => 'Not up at some point in the period',
 		'not_up_end' => 'Not up at the end of the period',
 		'never_up' => 'Not up at any time in the period',
@@ -49,7 +50,7 @@ final class NetworkInterfaces extends AbstractSection {
 	}
 
 	public function description(): string {
-		return 'Traffic, utilization, errors and link state for the selected interfaces, from hourly trend data.';
+		return 'Interfaces picked by description and name: traffic, utilization, errors and link state over the period, or only the ones not up right now.';
 	}
 
 	public function options(): array {
@@ -64,7 +65,10 @@ final class NetworkInterfaces extends AbstractSection {
 				'hint' => 'Names or descriptions to leave out, e.g. Vlan*, *spare*, Null0'],
 			['name' => 'state', 'label' => 'Link state', 'type' => 'select', 'default' => 'all',
 				'choices' => self::STATES,
-				'hint' => 'From the operational status item (ifOperStatus): 1 is up; 2 down, 7 lower layer down and the rest count as not up. Interfaces without one are left out when this is set.'],
+				'hint' => 'From the operational status item (ifOperStatus): 1 is up; 2 down, 7 lower layer down and the rest count as not up. "Right now" reads the latest value and lists only those interfaces, with when they went down: the one for a morning down report. The others read the period\'s hourly trends.'],
+			['name' => 'down_lookback', 'label' => 'Look back for when it went down (days)', 'type' => 'int', 'default' => 7,
+				'min' => 1, 'max' => 90,
+				'hint' => 'With "Not up right now": how far back to look for the last time each down interface was up, whatever the report period. Only the down ones are read.'],
 			['name' => 'sort', 'label' => 'Sort by', 'type' => 'select', 'default' => 'peak_util',
 				'choices' => self::SORTS],
 			['name' => 'limit', 'label' => 'Rows', 'type' => 'int', 'default' => 50, 'min' => 1, 'max' => 1000],
@@ -94,7 +98,17 @@ final class NetworkInterfaces extends AbstractSection {
 		$ports = array_filter($ports, static fn($p) => isset($hosts[$p['hostid']]));
 
 		if (!$ports) {
-			return $result->text('No interfaces on the devices in scope match these patterns.');
+			$result->text('No interfaces on the devices in scope match these patterns.');
+
+			foreach (Interfaces::explain($ctx, $filter) as $line) {
+				$result->note($line);
+			}
+
+			return $result;
+		}
+
+		if ($o['state'] === 'down_now') {
+			return $this->downNow($ctx, $o, $ports, $result);
 		}
 
 		// Only what the table will show. Link state is read once, by hoursAbove() below,
@@ -148,6 +162,7 @@ final class NetworkInterfaces extends AbstractSection {
 			$out_avg = $out['avg'] ?? 0.0;
 			$out_max = $out['max'] ?? 0.0;
 			$quiet = $in_max <= 0 && $out_max <= 0;
+			$has_traffic = isset($port['items']['in']) || isset($port['items']['out']);
 
 			// No traffic at all and no link state either: nothing to say about this port.
 			if ($in === null && $out === null && $state === null) {
@@ -180,12 +195,13 @@ final class NetworkInterfaces extends AbstractSection {
 				'alias' => $port['alias'],
 				'speed' => $speed_bps,
 				'speed_units' => 'bps',
-				'in_avg' => $in_avg,
-				'in_max' => $in_max,
-				'out_avg' => $out_avg,
-				'out_max' => $out_max,
-				'avg_util' => $speed_bps ? max($in_avg, $out_avg) * $to_bits / $speed_bps * 100 : null,
-				'peak_util' => $speed_bps ? max($in_max, $out_max) * $to_bits / $speed_bps * 100 : null,
+				// A port whose template keeps no traffic counters shows blanks, not zeros.
+				'in_avg' => $has_traffic ? $in_avg : null,
+				'in_max' => $has_traffic ? $in_max : null,
+				'out_avg' => $has_traffic ? $out_avg : null,
+				'out_max' => $has_traffic ? $out_max : null,
+				'avg_util' => $has_traffic && $speed_bps ? max($in_avg, $out_avg) * $to_bits / $speed_bps * 100 : null,
+				'peak_util' => $has_traffic && $speed_bps ? max($in_max, $out_max) * $to_bits / $speed_bps * 100 : null,
 				'units' => $units,
 				'in_id' => $port['items']['in']['itemid'] ?? null,
 				'out_id' => $port['items']['out']['itemid'] ?? null
@@ -210,7 +226,7 @@ final class NetworkInterfaces extends AbstractSection {
 		$matched = count($rows);
 		$threshold = (float) $o['util_threshold'];
 		$busy = count(array_filter($rows, static fn($r) => $r['peak_util'] !== null && $r['peak_util'] >= $threshold));
-		$no_speed = count(array_filter($rows, static fn($r) => $r['speed'] === null));
+		$no_speed = count(array_filter($rows, static fn($r) => $r['speed'] === null && $r['in_max'] !== null));
 
 		$kpis = [
 			['label' => 'Interfaces', 'value' => $matched, 'format' => 'int'],
@@ -364,6 +380,134 @@ final class NetworkInterfaces extends AbstractSection {
 		return Format::int($bps).' bps';
 	}
 
+	/**
+	 * The interfaces whose link is not up right now, from each status item's latest value
+	 * as Zabbix holds it: no trends, so nothing lags behind. When each went down comes
+	 * from the period's hourly trends: the last hour the link was seen up.
+	 */
+	private function downNow(Context $ctx, array $o, array $ports, SectionResult $result): SectionResult {
+		$now = time();
+		$tz = $ctx->timezone();
+		$with_status = array_filter($ports, static fn($p) => isset($p['items']['status']));
+		$no_status = count($ports) - count($with_status);
+		$latest = Interfaces::latest($ctx, array_map(static fn($p) => $p['items']['status']['itemid'], $with_status));
+		$down = [];
+		$stale = 0;
+		$unknown = 0;
+
+		foreach ($with_status as $id => $port) {
+			$v = $latest[$port['items']['status']['itemid']] ?? null;
+
+			if ($v === null || $v['value'] === null || !$v['supported']) {
+				$unknown++;
+
+				continue;
+			}
+
+			// A status item that has not reported for a day may be telling an old story.
+			if ($now - $v['clock'] > 86400) {
+				$stale++;
+			}
+
+			if ((int) round($v['value']) !== 1) {
+				$down[$id] = $v;
+			}
+		}
+
+		// When each went down: the last hour it was up, looking back far enough to find
+		// links down for days, and up to now rather than the end of the period.
+		$look_from = min($ctx->period->from, $now - (int) $o['down_lookback'] * 86400);
+		$links = $down ? Trends::linkState($ctx, array_map(static fn($id) => $ports[$id]['items']['status']['itemid'],
+			array_keys($down)), $look_from, max($ctx->period->till, $now)) : [];
+		$rows = [];
+
+		foreach ($down as $id => $v) {
+			$port = $ports[$id];
+			$link = $links[$port['items']['status']['itemid']] ?? null;
+
+			if ($link === null) {
+				$since = null;
+				$since_text = 'No trend data in the period';
+			}
+			elseif ($link['last_up_end'] === null) {
+				// Never up in the look-back: down since before it began.
+				$since = null;
+				$since_text = 'Before '.Format::datetime($look_from, $tz, 'j M Y H:i');
+			}
+			else {
+				$since = (int) $link['last_up_end'];
+				$since_text = Format::datetime($since, $tz, 'j M Y H:i');
+			}
+
+			$rows[] = [
+				'hostid' => $port['hostid'],
+				'host' => $ctx->hostName($port['hostid']),
+				'interface' => $port['name'] !== '' ? $port['name'] : '#'.$port['index'],
+				'alias' => $port['alias'],
+				'status' => self::statusLabel($v['value']),
+				'since' => $since,
+				'since_text' => $since_text,
+				'for' => $since !== null ? max(0, $now - $since) : null,
+				'for_text' => $since !== null
+					? Format::duration(max(0, $now - $since))
+					: ($link !== null ? 'Over '.Format::duration($now - $look_from) : ''),
+				'checked' => $v['clock'],
+				'checked_text' => Format::datetime($v['clock'], $tz, 'j M H:i')
+					.($now - $v['clock'] > 86400 ? ' (stale)' : '')
+			];
+		}
+
+		// Longest down first, the ones down before the period at the top, unless the report
+		// asks for names.
+		usort($rows, $o['sort'] === 'name'
+			? static fn($a, $b) => strnatcasecmp($a['host'], $b['host']) ?: strnatcasecmp($a['interface'], $b['interface'])
+			: static fn($a, $b) => [$a['since'] !== null, $a['since'] ?? 0, $a['host'], $a['interface']]
+				<=> [$b['since'] !== null, $b['since'] ?? 0, $b['host'], $b['interface']]);
+
+		$result->kpis([
+			['label' => 'Not up now', 'value' => count($rows), 'format' => 'int'],
+			['label' => 'Devices affected', 'value' => count(array_unique(array_column($rows, 'hostid'))), 'format' => 'int'],
+			['label' => 'Interfaces checked', 'value' => count($with_status) - $unknown, 'format' => 'int']
+		]);
+
+		$result->table('Interfaces not up now', [
+			['key' => 'host', 'label' => 'Device'],
+			['key' => 'interface', 'label' => 'Interface', 'nowrap' => true],
+			['key' => 'alias', 'label' => 'Description'],
+			['key' => 'status', 'label' => 'Status', 'nowrap' => true],
+			['key' => 'since_text', 'label' => 'Down since', 'nowrap' => true, 'export' => false],
+			['key' => 'since', 'label' => 'Down since', 'format' => 'datetime', 'screen' => false],
+			['key' => 'for_text', 'label' => 'For', 'nowrap' => true, 'export' => false],
+			['key' => 'for', 'label' => 'For (seconds)', 'format' => 'int', 'screen' => false],
+			['key' => 'checked_text', 'label' => 'Last checked', 'nowrap' => true, 'export' => false],
+			['key' => 'checked', 'label' => 'Last checked', 'format' => 'datetime', 'screen' => false]
+		], array_slice($rows, 0, (int) $o['limit']), [
+			'sheet' => 'Not up now',
+			'empty' => sprintf('All %d matching interfaces with a status item are up.', count($with_status) - $unknown)
+		]);
+
+		if (count($rows) > (int) $o['limit']) {
+			$result->note(sprintf('%d interfaces are not up; the first %d are listed.', count($rows), (int) $o['limit']));
+		}
+
+		$result->note(sprintf('Status as of %s, from each interface\'s latest operational status value: 1 is up, anything else is not. "Down since" is the end of the last hour the link was seen up, from hourly trends going back %d days, so it is accurate to the hour.',
+			Format::datetime($now, $tz, 'j M Y H:i'), (int) round(($now - $look_from) / 86400)));
+
+		if ($no_status > 0) {
+			$result->note(sprintf('%d matching interface(s) have no operational status item, so they cannot be checked.', $no_status));
+		}
+
+		if ($unknown > 0) {
+			$result->note(sprintf('%d matching interface(s) have a status item with no value yet, or one Zabbix marks as not supported.', $unknown));
+		}
+
+		if ($stale > 0) {
+			$result->note(sprintf('%d matching interface(s) have not reported status for more than a day; their last value is used and marked stale.', $stale));
+		}
+
+		return $result;
+	}
+
 	/** Trend summary of one of a port's items, or null when it has none in the period. */
 	private static function stat(array $sum, array $port, string $slot): ?array {
 		$id = $port['items'][$slot]['itemid'] ?? null;
@@ -434,8 +578,8 @@ final class NetworkInterfaces extends AbstractSection {
 		$key = static function (array $r) use ($sort): ?float {
 			switch ($sort) {
 				case 'avg_util': return $r['avg_util'];
-				case 'peak_traffic': return max($r['in_max'], $r['out_max']) * ($r['units'] === 'Bps' ? 8 : 1);
-				case 'avg_traffic': return max($r['in_avg'], $r['out_avg']) * ($r['units'] === 'Bps' ? 8 : 1);
+				case 'peak_traffic': return $r['in_max'] === null ? null : max($r['in_max'], $r['out_max']) * ($r['units'] === 'Bps' ? 8 : 1);
+				case 'avg_traffic': return $r['in_avg'] === null ? null : max($r['in_avg'], $r['out_avg']) * ($r['units'] === 'Bps' ? 8 : 1);
 				case 'errors': return $r['errors'] ?? null;
 				case 'discards': return $r['discards'] ?? null;
 				case 'down_hours': return isset($r['down_seconds']) ? (float) $r['down_seconds'] : null;
@@ -462,8 +606,8 @@ final class NetworkInterfaces extends AbstractSection {
 		switch ($sort) {
 			case 'peak_util': return [$r['peak_util'], '%'];
 			case 'avg_util': return [$r['avg_util'], '%'];
-			case 'peak_traffic': return [max($r['in_max'], $r['out_max']), $r['units']];
-			case 'avg_traffic': return [max($r['in_avg'], $r['out_avg']), $r['units']];
+			case 'peak_traffic': return [$r['in_max'] === null ? null : max($r['in_max'], $r['out_max']), $r['units']];
+			case 'avg_traffic': return [$r['in_avg'] === null ? null : max($r['in_avg'], $r['out_avg']), $r['units']];
 			case 'errors': return [$r['errors'] ?? null, ''];
 			case 'discards': return [$r['discards'] ?? null, ''];
 			case 'down_hours': return [isset($r['down_seconds']) ? $r['down_seconds'] / 3600 : null, 'h'];

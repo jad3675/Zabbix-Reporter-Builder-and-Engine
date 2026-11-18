@@ -16,7 +16,8 @@ final class Period {
 		'previous_week' => 'Previous week (Monday to Sunday)',
 		'previous_day' => 'Yesterday',
 		'month_to_date' => 'Month to date',
-		'last_n_days' => 'Last N days'
+		'last_n_days' => 'Last N days',
+		'last_24_hours' => 'Last 24 hours, up to when it runs'
 	];
 
 	/**
@@ -80,6 +81,15 @@ final class Period {
 				$start = $today->modify(sprintf('-%d days', $n));
 				$end = $today;
 				$label = sprintf('%s to %s', $start->format('j M Y'), $end->modify('-1 day')->format('j M Y'));
+				break;
+
+			// Rolling, to the minute it runs: a 06:00 report covers 06:00 yesterday to now,
+			// where "Yesterday" would stop at midnight and miss the night.
+			case 'last_24_hours':
+				$end = $now->setTime((int) $now->format('H'), (int) $now->format('i'), 0);
+				// Exactly 86,400 seconds, even across a clock change.
+				$start = (new DateTimeImmutable('@'.($end->getTimestamp() - 86400)))->setTimezone($tz);
+				$label = sprintf('%s to %s', $start->format('j M Y H:i'), $end->format('j M Y H:i'));
 				break;
 
 			default:

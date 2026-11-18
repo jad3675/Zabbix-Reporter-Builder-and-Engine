@@ -177,6 +177,23 @@ uplinks. Utilization is traffic over the speed the port reports at the end of th
 period; ports with no speed item show traffic only. Errors and discards are totals
 estimated from hourly averages of the per-second rates.
 
+**A morning down report.** Set the link state to "Not up right now (latest value)" and the
+section becomes a list of only the matching interfaces whose link is not up at the moment
+the report runs: status, down since, for how long, and when Zabbix last checked. It reads
+each status item's latest value, not trends, so a link that dropped ten minutes ago is on
+it and one that came back is not. "Down since" is the end of the last hour the link was
+seen up, from hourly trends going back "Look back for when it went down" days (7 by
+default), whatever the report period, and only for the interfaces that are down. Pair it
+with the "Last 24 hours, up to when it runs" period and a daily 06:00 schedule. "Last N
+days" and "Yesterday" both end at midnight, which is right for a monthly report and wrong
+for this one. Interfaces with only a status item (fabric links on some templates keep no
+traffic counters) are reported.
+
+When nothing matches, the section says why in its notes: no item names contain the
+pattern; they do, but on keys that are not interface keys (and which keys); the text is
+in the interface name rather than its description, or the other way round; or "Skip
+interfaces" left everything out.
+
 **Link state** comes from the operational status item (ifOperStatus): 1 is up, and 2
 (down), 7 (lower layer down) and every other value count as not up. The section can be
 limited to ports that were not up at some point, not up at the end of the period, not up

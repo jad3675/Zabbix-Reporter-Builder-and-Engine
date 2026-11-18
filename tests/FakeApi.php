@@ -196,6 +196,36 @@ final class FakeApi implements ApiClient {
 						$this->trends[$id] = [$kind, $base, $growth, $outage];
 					}
 				}
+
+				// ACI-style fabric ports on every tenth switch: an operational status item
+				// and nothing else, described "Fabric Physical Link". eth1/49 has been down
+				// for the last 30 hours on every twentieth; eth1/50 dropped mid-month for five
+				// hours and came back. Plus two fabric items on keys that are not interface
+				// keys, for the "why nothing matched" message.
+				if ((int) $hid % 10 === 0) {
+					$hours = (int) ceil(($till - $from) / 3600);
+
+					foreach ([[201, 'eth1/49', 'Fabric Physical Link to spine-1'], [202, 'eth1/50', 'Fabric Physical Link to spine-2']]
+							as [$idx, $ifname, $alias]) {
+						$id = (string) ++$iid;
+						$this->items[$id] = ['itemid' => $id, 'hostid' => $hid,
+							'name' => sprintf('Interface %s(%s): Operational status', $ifname, $alias),
+							'key_' => "net.if.status[ifOperStatus.$idx]", 'units' => '', 'value_type' => 3, 'status' => 0,
+							'tags' => [['tag' => 'interface', 'value' => $ifname], ['tag' => 'description', 'value' => $alias]],
+							'state' => '0', 'error' => ''];
+						$this->trends[$id] = $idx === 201
+							? ((int) $hid % 20 === 0 ? ['ifstatus', 2, 1000000, $hours - 30] : ['ifstatus', 1, 0, -1])
+							: ['ifstatus', 7, 5, 200];
+					}
+
+					foreach (['pod-1', 'pod-2'] as $pod) {
+						$id = (string) ++$iid;
+						$this->items[$id] = ['itemid' => $id, 'hostid' => $hid, 'name' => "Fabric health score $pod",
+							'key_' => "cisco.aci.fabric.health[$pod]", 'units' => '', 'value_type' => 3, 'status' => 0,
+							'tags' => [], 'state' => '0', 'error' => ''];
+						$this->trends[$id] = ['idle', 0, 0, -1];
+					}
+				}
 			}
 
 			foreach ($defs as [$name, $key, $units, $tags, $kind]) {
@@ -456,10 +486,15 @@ final class FakeApi implements ApiClient {
 
 	private function itemGet(array $p): array {
 		$hostids = array_flip($p['hostids'] ?? []);
+		$itemids = isset($p['itemids']) ? array_flip(array_map('strval', (array) $p['itemids'])) : null;
 		$out = [];
 
 		foreach ($this->items as $i) {
-			if (!isset($hostids[$i['hostid']])) {
+			if ($itemids !== null ? !isset($itemids[$i['itemid']]) : !isset($hostids[$i['hostid']])) {
+				continue;
+			}
+
+			if ($itemids !== null && isset($p['hostids']) && !isset($hostids[$i['hostid']])) {
 				continue;
 			}
 
@@ -497,6 +532,17 @@ final class FakeApi implements ApiClient {
 				if ($or ? $matched === 0 : $matched < count($p['tags'])) {
 					continue;
 				}
+			}
+
+			// Latest value, as the server holds it: the model's value in the last hour,
+			// checked a minute ago.
+			if (in_array('lastvalue', (array) ($p['output'] ?? []), true)) {
+				[$kind, $base, $growth, $outage_hour] = $this->trends[$i['itemid']] ?? ['', 0, 0, -1];
+				$hour = (int) floor(($this->till - ($this->from - ($this->from % 3600))) / 3600);
+				$i['lastclock'] = (string) (time() - 60);
+				$i['lastvalue'] = $kind === 'ifstatus'
+					? (string) (($outage_hour >= 0 && $hour >= $outage_hour && $hour < $outage_hour + $growth) ? $base : 1)
+					: '0';
 			}
 
 			$out[] = $i;
