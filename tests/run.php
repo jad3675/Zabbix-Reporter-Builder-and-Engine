@@ -726,6 +726,26 @@ check('a spare port down all period is idle, and the note says so', $rows === []
 check('picking a link state brings its columns even with them switched off',
 	in_array('status', array_column(array_values(array_filter($sec['blocks'], fn($b) => $b['type'] === 'table'))[0]['columns'], 'key'), true));
 
+// The item limit counts only what will be read: one status item per port for "down now".
+$limited = static function (array $options, int $max) use ($def, $period, $drop_registry, $limits): array {
+	return (new Runner($drop_registry))->run(
+		array_replace($def, ['compare' => false, 'sections' => [['type' => 'network_interfaces', 'title' => '',
+			'options' => $options]]]),
+		$period, new FakeApi($period->from, $period->till, 20), ['max_items' => $max] + $limits
+	)['sections'][0];
+};
+$wide = $limited(['alias' => 'uplink', 'exclude' => 'Vlan*'], 100);
+preg_match('/^(\d+) interfaces match, (\d+) items to read/', $wide['message'], $m);
+check('the full report counts every item it reads', $wide['status'] === 'error' && (int) ($m[2] ?? 0) === 8 * (int) ($m[1] ?? -1)
+	&& strpos($wide['message'], 'Items per selector') !== false, $wide['message']);
+$narrow = $limited(['alias' => 'uplink', 'exclude' => 'Vlan*', 'state' => 'down_now'], (int) $m[1]);
+check('down now fits where the full report does not: one item per port', $narrow['status'] === 'ok', $narrow['message']);
+$tight = $limited(['alias' => 'uplink', 'exclude' => 'Vlan*', 'state' => 'down_now'], (int) $m[1] - 1);
+check('down now still respects the limit', $tight['status'] === 'error' && strpos($tight['message'], (int) $m[1].' items to read') !== false,
+	$tight['message']);
+$lean = $limited(['alias' => 'uplink', 'exclude' => 'Vlan*', 'show_errors' => false, 'show_status' => false], 3 * (int) $m[1]);
+check('switching off errors and link state reads three items a port', $lean['status'] === 'ok', $lean['message']);
+
 // Down right now: the morning down report, on status-only fabric ports.
 $fab_fake = new FakeApi($period->from, $period->till, 20);
 $fab_hosts = array_values(array_filter($fab_fake->call('host.get', ['output' => ['hostid', 'name']]),

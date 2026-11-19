@@ -207,7 +207,9 @@ always down. A port whose link went down during the period is kept even with no 
 and picking a link state turns the idle filter off, so a dead uplink is never hidden for
 being quiet.
 
-Each port reads up to eight items for the whole period (four without errors and
+Only the items a run will read count against "Items per selector" (Settings): one per
+port for "Not up right now", three for traffic alone, up to eight with errors, discards
+and link state. Each port reads up to eight items for the whole period (four without errors and
 discards), so a month of a few hundred ports is a frontend-sized job and a month of
 thousands belongs to the CLI runner. A pattern that matches too much fails that section
 with a message; the rest of the report still runs.

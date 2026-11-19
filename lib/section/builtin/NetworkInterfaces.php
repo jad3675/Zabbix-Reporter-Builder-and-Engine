@@ -93,7 +93,19 @@ final class NetworkInterfaces extends AbstractSection {
 	public function run(Context $ctx, array $o): SectionResult {
 		$result = new SectionResult();
 		$filter = ['alias' => $o['alias'], 'name' => $o['name'], 'exclude' => $o['exclude'], 'logic' => $o['logic']];
-		$ports = $ctx->memo('ifaces:'.sha1(json_encode($filter)), static fn(Context $c) => Interfaces::find($c, $filter));
+		// Only the items this run will read count against the item limit: one status item
+		// per port for "not up right now", not the eight a port may have.
+		if ($o['state'] === 'down_now') {
+			$slots = ['status'];
+		}
+		else {
+			$slots = array_merge(['in', 'out', 'speed'],
+				$o['show_errors'] ? ['in_errors', 'out_errors', 'in_discards', 'out_discards'] : [],
+				($o['show_status'] || $o['state'] !== 'all') ? ['status'] : []);
+		}
+
+		$ports = $ctx->memo('ifaces:'.sha1(json_encode([$filter, $slots])),
+			static fn(Context $c) => Interfaces::find($c, $filter, $slots));
 		$hosts = $this->hosts($ctx, $o);
 		$ports = array_filter($ports, static fn($p) => isset($hosts[$p['hostid']]));
 

@@ -41,9 +41,11 @@ final class Interfaces {
 
 	/**
 	 * @param array $filter  alias, name, exclude (comma-separated patterns), logic (and|or)
+	 * @param ?string[] $slots  the items the caller will read (in, out, status...); only those
+	 *     count against the item limit. Null counts every item a port has.
 	 * @return array<string, array>  "hostid:index" => [hostid, index, name, alias, descr, items => slot => item]
 	 */
-	public static function find(Context $ctx, array $filter): array {
+	public static function find(Context $ctx, array $filter, ?array $slots = null): array {
 		$alias = Filters::patterns((string) ($filter['alias'] ?? ''));
 		$name = Filters::patterns((string) ($filter['name'] ?? ''));
 		$exclude = Filters::patterns((string) ($filter['exclude'] ?? ''));
@@ -56,7 +58,9 @@ final class Interfaces {
 		// With "and", every port kept matches the description patterns, so those alone
 		// narrow the search. With "or", either list can bring a port in.
 		$search = ($logic === 'and' && $alias && $name) ? $alias : array_merge($alias, $name);
-		$ports = self::candidates($ctx, $search);
+		// Status alone needs only status items from the API, not all eight per port.
+		$key = $slots === ['status'] ? 'net.if.status*' : 'net.if.*';
+		$ports = self::candidates($ctx, $search, $key);
 		$out = [];
 		$kept = 0;
 
@@ -66,14 +70,14 @@ final class Interfaces {
 			}
 
 			$out[$id] = $port;
-			$kept += count($port['items']);
+			$kept += $slots === null ? count($port['items']) : count(array_intersect_key($port['items'], array_flip($slots)));
 		}
 
 		$max = $ctx->limit('max_items', 20000);
 
 		if ($kept > $max) {
 			throw new SelectorTooBroad(sprintf(
-				'%d interfaces match, %d items in all, over the limit of %d. Narrow the description or name patterns, or the devices.',
+				'%d interfaces match, %d items to read, over the limit of %d. Narrow the description or name patterns, or the devices, or raise "Items per selector" in the report builder settings.',
 				count($out), $kept, $max
 			));
 		}
@@ -82,12 +86,12 @@ final class Interfaces {
 	}
 
 	/** Ports built from the interface items whose names match any of the patterns. */
-	private static function candidates(Context $ctx, array $search): array {
+	private static function candidates(Context $ctx, array $search, string $key = 'net.if.*'): array {
 		$ports = [];
 
 		// Rows are folded into ports as they arrive and then dropped, so the candidates
 		// cost a few fields each, not a full item with tags.
-		self::items($ctx, $search, static function (array $item) use (&$ports): void {
+		self::items($ctx, $search, $key, static function (array $item) use (&$ports): void {
 			$parsed = self::parseKey((string) $item['key_']);
 
 			if ($parsed === null) {
@@ -292,7 +296,7 @@ final class Interfaces {
 	 * the search can only narrow on one side, and most candidates are dropped once the
 	 * other side is checked. max_items applies to what is kept.
 	 */
-	private static function items(Context $ctx, array $patterns, callable $fn): void {
+	private static function items(Context $ctx, array $patterns, string $key, callable $fn): void {
 		$ceiling = $ctx->limit('max_items', 20000) * 5;
 		$seen = [];
 
@@ -304,7 +308,7 @@ final class Interfaces {
 					'hostids' => $hostids,
 					'monitored' => true,
 					'filter' => ['value_type' => [0, 3], 'status' => 0],
-					'search' => ['key_' => 'net.if.*', 'name' => $pattern],
+					'search' => ['key_' => $key, 'name' => $pattern],
 					'searchWildcardsEnabled' => true,
 					'limit' => $ceiling + 1
 				]);
@@ -320,7 +324,7 @@ final class Interfaces {
 
 				if (count($seen) > $ceiling) {
 					throw new SelectorTooBroad(sprintf(
-						'More than %d interface items match these patterns before filtering. Narrow the description or name patterns, or the devices.',
+						'More than %d interface items match these patterns before filtering. Narrow the description or name patterns, or the devices, or raise "Items per selector" in the report builder settings (this allows five times that).',
 						$ceiling
 					));
 				}
